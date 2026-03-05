@@ -33,17 +33,20 @@ const LEVELS_FILE = './levels.json';
 const WARNINGS_FILE = './warnings.json';
 const XPCHANNELS_FILE = './xpChannels.json';
 const AFK_FILE = './afk.json';
+const AUTOROLE_FILE = './autoroles.json';
 
 let levels = fs.existsSync(LEVELS_FILE) ? JSON.parse(fs.readFileSync(LEVELS_FILE)) : {};
 let warnings = fs.existsSync(WARNINGS_FILE) ? JSON.parse(fs.readFileSync(WARNINGS_FILE)) : {};
 let xpChannels = fs.existsSync(XPCHANNELS_FILE) ? JSON.parse(fs.readFileSync(XPCHANNELS_FILE)) : {};
 let afkData = fs.existsSync(AFK_FILE) ? JSON.parse(fs.readFileSync(AFK_FILE)) : {};
+let autoRoles = fs.existsSync(AUTOROLE_FILE) ? JSON.parse(fs.readFileSync(AUTOROLE_FILE)) : {};
 
 function saveData(){
   fs.writeFileSync(LEVELS_FILE, JSON.stringify(levels, null, 2));
   fs.writeFileSync(WARNINGS_FILE, JSON.stringify(warnings, null, 2));
   fs.writeFileSync(XPCHANNELS_FILE, JSON.stringify(xpChannels, null, 2));
   fs.writeFileSync(AFK_FILE, JSON.stringify(afkData, null, 2));
+  fs.writeFileSync(AUTOROLE_FILE, JSON.stringify(autoRoles, null, 2));
 }
 
 // ---------- SLASH COMMANDS ----------
@@ -70,11 +73,13 @@ const commands = [
     .addUserOption(o => o.setName("user").setDescription("User to remove XP").setRequired(true))
     .addIntegerOption(o => o.setName("amount").setDescription("XP amount").setRequired(true)),
   new SlashCommandBuilder().setName("leaderboard").setDescription("Shows top 10 users by level"),
-  new SlashCommandBuilder().setName("setxpchannel").setDescription("Set a channel where level-up messages will appear")
+  new SlashCommandBuilder().setName("setxpchannel").setDescription("Set channel for level-up messages")
     .addChannelOption(o => o.setName("channel").setDescription("Channel for level-up messages").setRequired(true)),
   new SlashCommandBuilder().setName("ping").setDescription("Check bot latency"),
   new SlashCommandBuilder().setName("afk").setDescription("Set yourself as AFK")
-    .addStringOption(o => o.setName("reason").setDescription("Reason for going AFK"))
+    .addStringOption(o => o.setName("reason").setDescription("Reason for going AFK")),
+  new SlashCommandBuilder().setName("setautorole").setDescription("Set role to auto-assign to new members")
+    .addRoleOption(o => o.setName("role").setDescription("Role to auto-assign").setRequired(true))
 ].map(cmd => cmd.toJSON());
 
 // ---------- REGISTER COMMANDS ----------
@@ -98,8 +103,11 @@ client.once("ready", () => {
 
 // ---------- WELCOME + AUTO-ROLE ----------
 client.on("guildMemberAdd", member => {
-  const role = member.guild.roles.cache.find(r => r.name === "AutoRole");
-  if(role) member.roles.add(role).catch(console.error);
+  const roleId = autoRoles[member.guild.id];
+  if(roleId){
+    const role = member.guild.roles.cache.get(roleId);
+    if(role) member.roles.add(role).catch(console.error);
+  }
 
   const channel = member.guild.channels.cache.find(c => c.name === "welcome");
   if(channel){
@@ -125,19 +133,17 @@ client.on("messageCreate", async message => {
     message.channel.send(`✅ Welcome back ${message.author.tag}, I removed your AFK status.`);
   }
 
-  // Notify if mentioned user is AFK and DM them
+  // Notify if mentioned user is AFK
   message.mentions.users.forEach(async user => {
     if(afkData[user.id]){
       message.channel.send(`⚠️ ${user.tag} is currently AFK: ${afkData[user.id]}`);
       try {
         await user.send(`💬 ${message.author.tag} mentioned you in **${message.guild.name}** while you were AFK.\nMessage: "${message.content}"`);
-      } catch (err) {
-        console.log(`Could not DM ${user.tag}.`);
-      }
+      } catch {}
     }
   });
 
-  // Give XP to all messages
+  // XP & leveling
   if(!levels[message.guild.id]) levels[message.guild.id] = {};
   if(!levels[message.guild.id][message.author.id]) levels[message.guild.id][message.author.id] = { xp: 0, level: 1 };
 
@@ -162,11 +168,12 @@ client.on("messageCreate", async message => {
 client.on("interactionCreate", async interaction => {
   if(!interaction.isCommand()) return;
   const { commandName, guild, member } = interaction;
-  if(!levels[guild.id]) levels[guild.id] = {};
-  if(!warnings[guild.id]) warnings[guild.id] = {};
   const isAdminPerm = member.permissions.has(PermissionsBitField.Flags.Administrator);
 
-  // ---------- HELP ----------
+  if(!levels[guild.id]) levels[guild.id] = {};
+  if(!warnings[guild.id]) warnings[guild.id] = {};
+
+  // HELP
   if(commandName === "help"){
     const embed = new EmbedBuilder()
       .setTitle("🤖 Bot Commands")
@@ -175,30 +182,29 @@ client.on("interactionCreate", async interaction => {
       .addFields(
         { name: "/kick @user", value: "Kick a member (Admin only)", inline: true },
         { name: "/ban @user", value: "Ban a member (Admin only)", inline: true },
-        { name: "/mute @user <minutes>", value: "Temporarily mute a member (Admin only)", inline: true },
+        { name: "/mute @user <minutes>", value: "Mute member (Admin only)", inline: true },
         { name: "/warn @user <reason>", value: "Warn a member (Admin only)", inline: true },
         { name: "/warnings @user", value: "Check warnings (Admin only)", inline: true },
         { name: "/level", value: "Check your level/profile", inline: true },
-        { name: "/addxp @user <amount>", value: "Add XP to a user (Admin only)", inline: true },
-        { name: "/removexp @user <amount>", value: "Remove XP from a user (Admin only)", inline: true },
-        { name: "/leaderboard", value: "Show top 10 users by level", inline: true },
-        { name: "/setxpchannel", value: "Set channel for level-up messages (Admin only)", inline: true },
+        { name: "/addxp @user <amount>", value: "Add XP (Admin only)", inline: true },
+        { name: "/removexp @user <amount>", value: "Remove XP (Admin only)", inline: true },
+        { name: "/leaderboard", value: "Top 10 users by level", inline: true },
+        { name: "/setxpchannel", value: "Channel for level-ups (Admin only)", inline: true },
+        { name: "/setautorole", value: "Auto-assign role to new members", inline: true },
         { name: "/ping", value: "Check bot latency", inline: true },
         { name: "/afk <reason>", value: "Set yourself as AFK", inline: true }
       )
-      .setFooter({ text: `Requested by ${interaction.user.tag}`, iconURL: interaction.user.displayAvatarURL() })
+      .setFooter({ text: `Requested by ${interaction.user.tag}` })
       .setTimestamp();
-
-    return interaction.reply({ embeds: [embed], ephemeral: false });
+    return interaction.reply({ embeds: [embed] });
   }
 
-  // ---------- ADMIN CHECK ----------
-  const adminCommands = ["kick","ban","mute","warn","warnings","addxp","removexp","setxpchannel"];
-  if(adminCommands.includes(commandName) && !isAdminPerm){
-    return interaction.reply({ content: "❌ You need Administrator permission to use this command.", ephemeral: true });
-  }
+  // Admin commands check
+  const adminCommands = ["kick","ban","mute","warn","warnings","addxp","removexp","setxpchannel","setautorole"];
+  if(adminCommands.includes(commandName) && !isAdminPerm)
+    return interaction.reply({ content: "❌ Admin permission required.", ephemeral: true });
 
-  // ---------- KICK ----------
+  // KICK
   if(commandName === "kick"){
     const target = interaction.options.getUser("user");
     const memberTarget = guild.members.cache.get(target.id);
@@ -207,7 +213,7 @@ client.on("interactionCreate", async interaction => {
                         .catch(() => interaction.reply("Failed to kick."));
   }
 
-  // ---------- BAN ----------
+  // BAN
   if(commandName === "ban"){
     const target = interaction.options.getUser("user");
     const memberTarget = guild.members.cache.get(target.id);
@@ -216,62 +222,57 @@ client.on("interactionCreate", async interaction => {
                        .catch(() => interaction.reply("Failed to ban."));
   }
 
-  // ---------- MUTE ----------
+  // MUTE
   if(commandName === "mute"){
     const target = interaction.options.getUser("user");
     const minutes = interaction.options.getInteger("minutes");
     const memberTarget = guild.members.cache.get(target.id);
     if(!memberTarget) return interaction.reply("User not found.");
-    interaction.reply(`${target.tag} has been muted for ${minutes} minutes. (Set up a Muted role manually)`);
+    return interaction.reply(`${target.tag} muted for ${minutes} minutes. (Set up Muted role manually)`);
   }
 
-  // ---------- WARN ----------
+  // WARN
   if(commandName === "warn"){
     const target = interaction.options.getUser("user");
     const reason = interaction.options.getString("reason");
     if(!warnings[guild.id][target.id]) warnings[guild.id][target.id] = [];
     warnings[guild.id][target.id].push(reason);
     saveData();
-    interaction.reply(`${target.tag} has been warned for: ${reason}`);
+    return interaction.reply(`${target.tag} warned for: ${reason}`);
   }
 
-  // ---------- WARNINGS ----------
+  // WARNINGS
   if(commandName === "warnings"){
     const target = interaction.options.getUser("user");
     const userWarnings = warnings[guild.id][target.id] || [];
-    interaction.reply(`${target.tag} has ${userWarnings.length} warnings:\n${userWarnings.join("\n") || "No warnings."}`);
+    return interaction.reply(`${target.tag} has ${userWarnings.length} warnings:\n${userWarnings.join("\n") || "No warnings."}`);
   }
 
-  // ---------- LEVEL ----------
+  // LEVEL
   if(commandName === "level"){
     const targetUser = interaction.options.getUser("user") || interaction.user;
     if(!levels[guild.id][targetUser.id]) levels[guild.id][targetUser.id] = { xp: 0, level: 1 };
     const data = levels[guild.id][targetUser.id];
-
     const embed = new EmbedBuilder()
       .setTitle(`${targetUser.tag}'s Profile`)
       .setColor("Gold")
-      .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
-      .addFields(
-        { name: "Level & XP", value: `**Level:** ${data.level}\n**XP:** ${data.xp}/${data.level * 100}` }
-      )
+      .addFields({ name: "Level & XP", value: `Level: ${data.level}\nXP: ${data.xp}/${data.level*100}` })
       .setFooter({ text: `Requested by ${interaction.user.tag}` })
       .setTimestamp();
-
     return interaction.reply({ embeds: [embed] });
   }
 
-  // ---------- ADD XP ----------
+  // ADD XP
   if(commandName === "addxp"){
     const targetUser = interaction.options.getUser("user");
     const amount = interaction.options.getInteger("amount");
     if(!levels[guild.id][targetUser.id]) levels[guild.id][targetUser.id] = { xp: 0, level: 1 };
     levels[guild.id][targetUser.id].xp += amount;
     saveData();
-    interaction.reply(`✅ Added ${amount} XP to ${targetUser.tag}.`);
+    return interaction.reply(`✅ Added ${amount} XP to ${targetUser.tag}.`);
   }
 
-  // ---------- REMOVE XP ----------
+  // REMOVE XP
   if(commandName === "removexp"){
     const targetUser = interaction.options.getUser("user");
     const amount = interaction.options.getInteger("amount");
@@ -279,19 +280,17 @@ client.on("interactionCreate", async interaction => {
     levels[guild.id][targetUser.id].xp -= amount;
     if(levels[guild.id][targetUser.id].xp < 0) levels[guild.id][targetUser.id].xp = 0;
     saveData();
-    interaction.reply(`✅ Removed ${amount} XP from ${targetUser.tag}.`);
+    return interaction.reply(`✅ Removed ${amount} XP from ${targetUser.tag}.`);
   }
 
-  // ---------- LEADERBOARD ----------
+  // LEADERBOARD
   if(commandName === "leaderboard"){
     const guildLevels = levels[guild.id];
     if(!guildLevels || Object.keys(guildLevels).length === 0) 
       return interaction.reply("No level data yet.");
-
     const sorted = Object.entries(guildLevels)
       .sort(([,a],[,b]) => b.level - a.level || b.xp - a.xp)
       .slice(0, 10);
-
     let description = "";
     for(let i=0;i<sorted.length;i++){
       const userId = sorted[i][0];
@@ -299,17 +298,15 @@ client.on("interactionCreate", async interaction => {
       const user = await client.users.fetch(userId).catch(()=>({tag:"Unknown#0000"}));
       description += `**${i+1}. ${user.tag}** - Level ${data.level} | XP ${data.xp}\n`;
     }
-
     const embed = new EmbedBuilder()
       .setTitle(`🏆 Top 10 Users in ${guild.name}`)
       .setColor("Purple")
       .setDescription(description)
       .setTimestamp();
-
     return interaction.reply({ embeds: [embed] });
   }
 
-  // ---------- SET XP CHANNEL ----------
+  // SET XP CHANNEL
   if(commandName === "setxpchannel"){
     const channel = interaction.options.getChannel("channel");
     xpChannels[guild.id] = [channel.id];
@@ -317,7 +314,15 @@ client.on("interactionCreate", async interaction => {
     return interaction.reply(`✅ Level-up messages will now appear in ${channel}.`);
   }
 
-  // ---------- PING ----------
+  // SET AUTO-ROLE
+  if(commandName === "setautorole"){
+    const role = interaction.options.getRole("role");
+    autoRoles[guild.id] = role.id;
+    saveData();
+    return interaction.reply(`✅ Auto-role set to ${role.name}.`);
+  }
+
+  // PING
   if(commandName === "ping"){
     const embed = new EmbedBuilder()
       .setTitle("🏓 Pong!")
@@ -327,17 +332,17 @@ client.on("interactionCreate", async interaction => {
         { name: "Bot Latency", value: `${Date.now() - interaction.createdTimestamp}ms`, inline: true }
       )
       .setTimestamp();
-
     return interaction.reply({ embeds: [embed] });
   }
 
-  // ---------- AFK ----------
+  // AFK
   if(commandName === "afk"){
     const reason = interaction.options.getString("reason") || "AFK";
     afkData[interaction.user.id] = reason;
     saveData();
     return interaction.reply({ content: `✅ You are now AFK: ${reason}`, ephemeral: true });
   }
+
 });
 
 // ---------- LOGIN ----------
