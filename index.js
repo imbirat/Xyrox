@@ -123,6 +123,29 @@ client.on("guildMemberAdd", member => {
 // ---------- MESSAGE HANDLER ----------
 client.on("messageCreate", async message => {
   if(message.author.bot) return;
+  client.on("messageCreate", async message => {
+  if(message.author.bot) return;
+
+  // ---------- ?RULES ----------
+  if(message.content === "?rules"){
+    const rulesEmbed = new EmbedBuilder()
+      .setColor(0x2f3136)
+      .setTitle("📜 Discord Server Rules")
+      .setDescription(
+        "**1. Respect Everyone**\nNo harassment, bullying, hate speech, or discrimination.\n\n" +
+        "**2. No Spamming**\nAvoid spam, excessive emojis, mentions, or self-promotion.\n\n" +
+        "**3. Keep Content Appropriate**\nNo NSFW, illegal, or pirated content.\n\n" +
+        "**4. Respect Privacy**\nNo doxxing or sharing personal info without consent.\n\n" +
+        "**5. No Advertising**\nAdvertising other servers, bots, or products is not allowed without permission.\n\n" +
+        "**6. Follow Staff Instructions**\nAlways respect moderators and admins; their decisions are final.\n\n" +
+        "**7. No Impersonation**\nDo not impersonate staff or other members.\n\n" +
+        "**8. English Only**\nUse English in main channels to help everyone understand. (Optional)\n\n" +
+        "**9. Have Fun!** 🎉\nEnjoy yourself and help create a friendly community!"
+      )
+      .setFooter({ text: "Follow the rules to keep the server safe and fun!" });
+
+    message.channel.send({ embeds: [rulesEmbed] });
+  }
 
   // Remove AFK if user sends message
   if(afkData[message.author.id]){
