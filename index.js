@@ -100,10 +100,10 @@ client.once("ready", () => {
 
   // Set idle status with custom activity
   client.user.setPresence({
-    status: 'idle',
+    status: 'idle', // idle status
     activities: [
       {
-        name: '/help | InfernoX',
+        name: '/help | InfernoX', // Status text
         type: 0 // Playing
       }
     ]
