@@ -1,283 +1,265 @@
-// ================= IMPORT =================
-const {
-  Client,
-  GatewayIntentBits,
-  Partials,
-  EmbedBuilder,
-  PermissionsBitField,
-  REST,
-  Routes,
-  SlashCommandBuilder
-} = require("discord.js");
+// ================= IMPORTS =================
+const { 
+  Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField, REST, Routes, SlashCommandBuilder
+} = require('discord.js');
 
+const { QuickDB } = require('quick.db');
+const db = new QuickDB();
+
+// CLIENT
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers
-  ],
-  partials: [Partials.Channel]
+    GatewayIntentBits.MessageContent
+  ]
 });
 
-const prefix = "?";
+// ================= COMMANDS =================
+const commands = [
+  new SlashCommandBuilder().setName("help").setDescription("Show help menu"),
+  new SlashCommandBuilder().setName("rules").setDescription("Show server rules"),
+  new SlashCommandBuilder().setName("daily").setDescription("Claim daily coins"),
+  new SlashCommandBuilder().setName("cash").setDescription("Check your balance"),
+  new SlashCommandBuilder().setName("give")
+    .setDescription("Give coins to a user")
+    .addUserOption(o => o.setName("user").setDescription("User to give coins").setRequired(true))
+    .addIntegerOption(o => o.setName("amount").setDescription("Amount to give").setRequired(true)),
+  new SlashCommandBuilder().setName("rob")
+    .setDescription("Rob coins from a user")
+    .addUserOption(o => o.setName("user").setDescription("User to rob").setRequired(true)),
+  new SlashCommandBuilder().setName("gamble")
+    .setDescription("Gamble your coins")
+    .addIntegerOption(o => o.setName("amount").setDescription("Amount to gamble").setRequired(true)),
+  new SlashCommandBuilder().setName("fish").setDescription("Go fishing for coins"),
+  new SlashCommandBuilder().setName("profile").setDescription("Check your profile"),
+  new SlashCommandBuilder().setName("setwelcomechannel")
+    .setDescription("Set welcome channel")
+    .addChannelOption(o => o.setName("channel").setDescription("Welcome channel").setRequired(true)),
+  new SlashCommandBuilder().setName("ban")
+    .setDescription("Ban a user")
+    .addUserOption(o => o.setName("user").setDescription("User to ban").setRequired(true)),
+  new SlashCommandBuilder().setName("kick")
+    .setDescription("Kick a user")
+    .addUserOption(o => o.setName("user").setDescription("User to kick").setRequired(true)),
+  new SlashCommandBuilder().setName("mute")
+    .setDescription("Mute a user (10min)")
+    .addUserOption(o => o.setName("user").setDescription("User to mute").setRequired(true)),
+  new SlashCommandBuilder().setName("unmute")
+    .setDescription("Unmute a user")
+    .addUserOption(o => o.setName("user").setDescription("User to unmute").setRequired(true))
+].map(cmd => cmd.toJSON());
 
-// ================= CONFIG =================
-let commandMode = "both"; // slash | prefix | both
-
-let economy = {};
-let inventory = {};
-let xp = {};
-let levels = {};
-let welcomeChannel = {};
-
-// ================= SHOP =================
-const shop = {
-  rod: { name: "Fishing Rod", price: 500 },
-  laptop: { name: "Laptop", price: 2000 },
-  vip: { name: "VIP Role", price: 5000 }
-};
-
-// ================= HELPER =================
-function getUser(id) {
-  if (!economy[id]) economy[id] = { cash: 0 };
-  if (!inventory[id]) inventory[id] = [];
-  if (!xp[id]) xp[id] = 0;
-  if (!levels[id]) levels[id] = 0;
-}
-
-// ================= READY =================
-client.once("ready", async () => {
-  console.log(`✅ ${client.user.tag} online`);
-
-  const commands = [
-    new SlashCommandBuilder().setName("help").setDescription("Help menu"),
-    new SlashCommandBuilder().setName("rules").setDescription("Server rules"),
-    new SlashCommandBuilder().setName("balance").setDescription("Check money"),
-    new SlashCommandBuilder().setName("daily").setDescription("Daily reward"),
-
-    new SlashCommandBuilder()
-      .setName("give")
-      .setDescription("Give money")
-      .addUserOption(o => o.setName("user").setRequired(true))
-      .addIntegerOption(o => o.setName("amount").setRequired(true)),
-
-    new SlashCommandBuilder().setName("shop").setDescription("View shop"),
-    new SlashCommandBuilder().setName("inventory").setDescription("Inventory"),
-
-    new SlashCommandBuilder()
-      .setName("buy")
-      .setDescription("Buy item")
-      .addStringOption(o =>
-        o.setName("item").setRequired(true).addChoices(
-          { name: "Fishing Rod", value: "rod" },
-          { name: "Laptop", value: "laptop" },
-          { name: "VIP Role", value: "vip" }
-        )
-      ),
-
-    new SlashCommandBuilder().setName("profile").setDescription("Profile"),
-
-    new SlashCommandBuilder()
-      .setName("setcommandtype")
-      .setDescription("Set command mode")
-      .addStringOption(o =>
-        o.setName("mode").setRequired(true).addChoices(
-          { name: "Slash Only", value: "slash" },
-          { name: "Prefix Only", value: "prefix" },
-          { name: "Both", value: "both" }
-        )
-      ),
-
-    new SlashCommandBuilder()
-      .setName("setwelcomechannel")
-      .setDescription("Set welcome channel")
-      .addChannelOption(o => o.setName("channel").setRequired(true)),
-
-    new SlashCommandBuilder()
-      .setName("ban")
-      .setDescription("Ban user")
-      .addUserOption(o => o.setName("user").setRequired(true)),
-
-    new SlashCommandBuilder()
-      .setName("kick")
-      .setDescription("Kick user")
-      .addUserOption(o => o.setName("user").setRequired(true))
-  ];
+// ================= REGISTER SLASH COMMANDS =================
+client.on("ready", async () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
 
   const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
-  await rest.put(
-    Routes.applicationCommands(client.user.id),
-    { body: commands }
-  );
-
-  console.log("✅ Slash commands loaded");
-});
-
-// ================= SLASH =================
-client.on("interactionCreate", async (i) => {
-  if (!i.isChatInputCommand()) return;
-
-  if (commandMode === "prefix")
-    return i.reply({ content: "❌ Slash disabled", ephemeral: true });
-
-  getUser(i.user.id);
-
-  const cmd = i.commandName;
-
-  if (cmd === "help") {
-    return i.reply("📘 /help /rules /shop /balance /profile");
-  }
-
-  if (cmd === "rules") {
-    const embed = new EmbedBuilder()
-      .setTitle("📜 Rules")
-      .setDescription(`
-1. Respect Everyone
-2. No Spamming
-3. Keep Content Appropriate
-4. Respect Privacy
-5. No Advertising
-6. Follow Staff
-7. No Impersonation
-9. Have Fun 🎉
-`);
-    return i.reply({ embeds: [embed] });
-  }
-
-  if (cmd === "balance")
-    return i.reply(`💰 ${economy[i.user.id].cash}`);
-
-  if (cmd === "daily") {
-    let amt = Math.floor(Math.random() * 300);
-    economy[i.user.id].cash += amt;
-    return i.reply(`💰 +${amt}`);
-  }
-
-  if (cmd === "give") {
-    let user = i.options.getUser("user");
-    let amt = i.options.getInteger("amount");
-
-    getUser(user.id);
-
-    economy[i.user.id].cash -= amt;
-    economy[user.id].cash += amt;
-
-    return i.reply("✅ sent");
-  }
-
-  if (cmd === "shop") {
-    return i.reply(Object.values(shop).map(x => `${x.name} - ${x.price}`).join("\n"));
-  }
-
-  if (cmd === "buy") {
-    let item = shop[i.options.getString("item")];
-    if (!item) return i.reply("no item");
-
-    if (economy[i.user.id].cash < item.price)
-      return i.reply("no money");
-
-    economy[i.user.id].cash -= item.price;
-    inventory[i.user.id].push(item.name);
-
-    return i.reply(`🛒 bought ${item.name}`);
-  }
-
-  if (cmd === "inventory")
-    return i.reply(inventory[i.user.id].join(", ") || "empty");
-
-  if (cmd === "profile") {
-    return i.reply(`Level: ${levels[i.user.id]} | XP: ${xp[i.user.id]}`);
-  }
-
-  if (cmd === "setcommandtype") {
-    if (!i.member.permissions.has(PermissionsBitField.Flags.Administrator))
-      return i.reply("admin only");
-
-    commandMode = i.options.getString("mode");
-    return i.reply(`mode = ${commandMode}`);
-  }
-
-  if (cmd === "setwelcomechannel") {
-    if (!i.member.permissions.has(PermissionsBitField.Flags.Administrator))
-      return i.reply("admin only");
-
-    welcomeChannel[i.guild.id] = i.options.getChannel("channel").id;
-    return i.reply("✅ set");
-  }
-
-  if (cmd === "ban") {
-    if (!i.member.permissions.has(PermissionsBitField.Flags.Administrator))
-      return;
-
-    let user = i.options.getMember("user");
-    user.ban();
-    i.reply("banned");
-  }
-
-  if (cmd === "kick") {
-    if (!i.member.permissions.has(PermissionsBitField.Flags.Administrator))
-      return;
-
-    let user = i.options.getMember("user");
-    user.kick();
-    i.reply("kicked");
+  try {
+    console.log("⚡ Registering slash commands...");
+    await rest.put(
+      Routes.applicationCommands(client.user.id),
+      { body: commands }
+    );
+    console.log("✅ Slash commands registered!");
+  } catch (err) {
+    console.error(err);
   }
 });
 
-// ================= PREFIX =================
-client.on("messageCreate", (m) => {
-  if (m.author.bot) return;
+// ================= WELCOME SYSTEM =================
+client.on("guildMemberAdd", async member => {
+  const channelId = await db.get(`welcome_${member.guild.id}`);
+  if (!channelId) return;
 
-  getUser(m.author.id);
-
-  // XP
-  xp[m.author.id] += 5;
-  let need = (levels[m.author.id] + 1) * 100;
-
-  if (xp[m.author.id] >= need) {
-    levels[m.author.id]++;
-    xp[m.author.id] = 0;
-    m.channel.send(`🎉 ${m.author} level ${levels[m.author.id]}`);
-  }
-
-  if (!m.content.startsWith(prefix)) return;
-  if (commandMode === "slash") return;
-
-  const args = m.content.slice(prefix.length).split(" ");
-  const cmd = args[0];
-
-  if (cmd === "help") return m.reply("use /help");
-  if (cmd === "rules") return m.reply("use /rules");
-
-  if (cmd === "balance")
-    return m.reply(economy[m.author.id].cash);
-
-  if (cmd === "shop")
-    return m.reply(Object.values(shop).map(x => `${x.name}-${x.price}`).join("\n"));
-
-  if (cmd === "inventory")
-    return m.reply(inventory[m.author.id].join(", ") || "empty");
-
-  if (cmd === "setcommandtype") {
-    if (!m.member.permissions.has(PermissionsBitField.Flags.Administrator))
-      return;
-
-    commandMode = args[1];
-    return m.reply(`mode = ${commandMode}`);
-  }
-});
-
-// ================= WELCOME =================
-client.on("guildMemberAdd", (member) => {
-  let ch = member.guild.channels.cache.get(welcomeChannel[member.guild.id]);
-  if (!ch) return;
+  const channel = member.guild.channels.cache.get(channelId);
+  if (!channel) return;
 
   const embed = new EmbedBuilder()
-    .setDescription(`Hello ${member}\nWelcome to ${member.guild.name}\nMember #${member.guild.memberCount}`);
+    .setColor("Green")
+    .setDescription(
+`👋 Hello ${member}
 
-  ch.send({ embeds: [embed] });
+Welcome to **${member.guild.name}**
+Make sure to read rules <#rules-channel>
+
+🎉 Member #${member.guild.memberCount} — enjoy your stay!`
+    );
+
+  channel.send({ embeds: [embed] });
+});
+
+// ================= LEVEL SYSTEM =================
+client.on("messageCreate", async message => {
+  if (message.author.bot) return;
+
+  let xp = await db.get(`xp_${message.author.id}`) || 0;
+  xp += 10;
+  let level = Math.floor(0.1 * Math.sqrt(xp));
+  await db.set(`xp_${message.author.id}`, xp);
+
+  if (xp % 100 === 0) {
+    message.channel.send(`🎉 ${message.author} you have reached level ${level}`);
+  }
+});
+
+// ================= INTERACTIONS =================
+client.on("interactionCreate", async interaction => {
+  if (!interaction.isCommand()) return;
+
+  const { commandName, options } = interaction;
+
+  if (commandName === "help") {
+    const embed = new EmbedBuilder()
+      .setColor("Blue")
+      .setTitle("📘 Help Menu")
+      .setDescription(`
+💰 Economy:
+/daily /cash /give /rob /gamble /fish
+
+📊 Level:
+/profile
+
+🛠 Admin:
+/ban /kick /mute /unmute /setwelcomechannel
+
+📜 Info:
+/rules
+      `);
+    return interaction.reply({ embeds: [embed], ephemeral: true });
+  }
+
+  if (commandName === "rules") {
+    const embed = new EmbedBuilder()
+      .setColor("Orange")
+      .setTitle("📜 Discord Server Rules")
+      .setDescription(`
+1. Respect Everyone  
+2. No Spamming  
+3. Keep Content Appropriate  
+4. Respect Privacy  
+5. No Advertising  
+6. Follow Staff Instructions  
+7. No Impersonation  
+9. Have Fun! 🎉
+      `);
+    return interaction.reply({ embeds: [embed] });
+  }
+
+  // ================= ECONOMY =================
+  if (commandName === "daily") {
+    let money = await db.get(`money_${interaction.user.id}`) || 0;
+    money += 500;
+    db.set(`money_${interaction.user.id}`, money);
+    return interaction.reply("💰 You claimed 500 coins!");
+  }
+
+  if (commandName === "cash") {
+    let money = await db.get(`money_${interaction.user.id}`) || 0;
+    return interaction.reply(`💰 You have ${money} coins`);
+  }
+
+  if (commandName === "give") {
+    let user = options.getUser("user");
+    let amount = options.getInteger("amount");
+    let sender = await db.get(`money_${interaction.user.id}`) || 0;
+
+    if (sender < amount) return interaction.reply("❌ Not enough money");
+
+    db.add(`money_${user.id}`, amount);
+    db.sub(`money_${interaction.user.id}`, amount);
+
+    return interaction.reply(`💸 Sent ${amount} coins to ${user}`);
+  }
+
+  if (commandName === "rob") {
+    let user = options.getUser("user");
+    let amount = Math.floor(Math.random() * 300);
+
+    db.sub(`money_${user.id}`, amount);
+    db.add(`money_${interaction.user.id}`, amount);
+
+    return interaction.reply(`🕵️ You robbed ${amount} coins from ${user}`);
+  }
+
+  if (commandName === "gamble") {
+    let amount = options.getInteger("amount");
+    let win = Math.random() > 0.5;
+
+    if (win) {
+      db.add(`money_${interaction.user.id}`, amount);
+      return interaction.reply("🎉 You won!");
+    } else {
+      db.sub(`money_${interaction.user.id}`, amount);
+      return interaction.reply("💀 You lost!");
+    }
+  }
+
+  if (commandName === "fish") {
+    let amount = Math.floor(Math.random() * 200);
+    db.add(`money_${interaction.user.id}`, amount);
+    return interaction.reply(`🎣 You earned ${amount} coins`);
+  }
+
+  // ================= PROFILE =================
+  if (commandName === "profile") {
+    let xp = await db.get(`xp_${interaction.user.id}`) || 0;
+    let money = await db.get(`money_${interaction.user.id}`) || 0;
+    let level = Math.floor(0.1 * Math.sqrt(xp));
+
+    const embed = new EmbedBuilder()
+      .setColor("Purple")
+      .setTitle(`${interaction.user.username}'s Profile`)
+      .setDescription(`Level: ${level}\nXP: ${xp}\nCoins: ${money}`);
+
+    return interaction.reply({ embeds: [embed] });
+  }
+
+  // ================= ADMIN =================
+  if (commandName === "setwelcomechannel") {
+    if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator))
+      return interaction.reply("❌ You need Admin perms!");
+
+    let channel = options.getChannel("channel");
+    await db.set(`welcome_${interaction.guild.id}`, channel.id);
+    return interaction.reply("✅ Welcome channel set!");
+  }
+
+  if (commandName === "ban") {
+    if (!interaction.member.permissions.has(PermissionsBitField.Flags.BanMembers))
+      return interaction.reply("❌ You need Ban perms!");
+
+    let user = options.getUser("user");
+    let member = await interaction.guild.members.fetch(user.id);
+    member.ban();
+    return interaction.reply(`🔨 ${user.username} banned`);
+  }
+
+  if (commandName === "kick") {
+    if (!interaction.member.permissions.has(PermissionsBitField.Flags.KickMembers))
+      return interaction.reply("❌ You need Kick perms!");
+
+    let user = options.getUser("user");
+    let member = await interaction.guild.members.fetch(user.id);
+    member.kick();
+    return interaction.reply(`👢 ${user.username} kicked`);
+  }
+
+  if (commandName === "mute") {
+    let user = options.getUser("user");
+    let member = await interaction.guild.members.fetch(user.id);
+    await member.timeout(600000);
+    return interaction.reply(`🔇 ${user.username} muted for 10min`);
+  }
+
+  if (commandName === "unmute") {
+    let user = options.getUser("user");
+    let member = await interaction.guild.members.fetch(user.id);
+    await member.timeout(null);
+    return interaction.reply(`🔊 ${user.username} unmuted`);
+  }
 });
 
 // ================= LOGIN =================
