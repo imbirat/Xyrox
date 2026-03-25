@@ -102,7 +102,7 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 // ---------------------------- READY ----------------------------
 client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
-  client.user.setPresence({ status: 'idle', activities: [{ name: '/help | ?help', type: 0 }] });
+  client.user.setPresence({ status: 'online', activities: [{ name: '?help | Xyrix', type: 0 }] });
 });
 
 // ---------------------------- WELCOME + AUTO-ROLE ----------------------------
