@@ -1,16 +1,17 @@
 {
-  "name": "xyrix-bot",
+  "name": "nodejs",
   "version": "1.0.0",
-  "description": "All-in-one Discord bot with economy, leveling, welcome, and moderation",
+  "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
   "dependencies": {
-    "discord.js": "^14.15.0",
-    "quick.db": "github:devsnowflake/quick.db"
-  },
-  "engines": {
-    "node": ">=18.0.0"
+    "@types/node": "^22.13.11",
+    "discord.js": "^14.25.1",
+    "express": "^5.2.1"
   }
 }
