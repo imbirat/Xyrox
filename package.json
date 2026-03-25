@@ -1,25 +1,16 @@
 {
   "name": "xyrix-bot",
   "version": "1.0.0",
-  "description": "All-in-one Discord bot with economy, leveling, welcome, moderation, and slash commands",
+  "description": "All-in-one Discord bot with economy, leveling, welcome, and moderation",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "discord.js": "^14.15.0",
-    "@louislam/quick.db": "^8.0.0"
+    "quick.db": "github:devsnowflake/quick.db"
   },
   "engines": {
     "node": ">=18.0.0"
-  },
-  "keywords": [
-    "discord",
-    "bot",
-    "economy",
-    "leveling",
-    "slash-commands"
-  ],
-  "author": "YourName",
-  "license": "MIT"
+  }
 }
