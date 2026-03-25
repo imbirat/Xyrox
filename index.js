@@ -3,7 +3,7 @@ const {
   Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField, REST, Routes, SlashCommandBuilder
 } = require('discord.js');
 
-const { QuickDB } = require('@louislam/quick.db');
+const { QuickDB } = require('quick.db'); // ✅ GitHub fork works on Railway
 const db = new QuickDB();
 
 const client = new Client({
