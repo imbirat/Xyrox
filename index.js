@@ -106,7 +106,7 @@ client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   client.user.setPresence({
     status: 'idle',
-    activities: [{ name: '/help | InfernoX', type: 0 }]
+    activities: [{ name: '/help | Xyrix', type: 0 }]
   });
 });
 
