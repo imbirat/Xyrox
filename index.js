@@ -1,360 +1,228 @@
-```js
-const {
-Client,
-GatewayIntentBits,
-EmbedBuilder,
-SlashCommandBuilder,
-PermissionsBitField,
-REST,
-Routes,
-ChannelType
+/* ---------------- IMPORTS ---------------- */
+const { 
+  Client, GatewayIntentBits, EmbedBuilder, SlashCommandBuilder, PermissionsBitField, 
+  REST, Routes, ChannelType, InteractionType 
 } = require("discord.js");
-
 const fs = require("fs");
 const express = require("express");
 
-/* ---------------- EXPRESS SERVER ---------------- */
-
+/* ---------------- EXPRESS ---------------- */
 const app = express();
-app.get("/", (req,res)=>res.send("Bot is running"));
-app.listen(3000,()=>console.log("Web server started"));
+app.get("/", (req,res)=>res.send("GOD v3.1 BOT ONLINE"));
+app.listen(3000,()=>console.log("Web server running"));
 
 /* ---------------- CLIENT ---------------- */
-
 const client = new Client({
-intents:[
-GatewayIntentBits.Guilds,
-GatewayIntentBits.GuildMembers,
-GatewayIntentBits.GuildMessages,
-GatewayIntentBits.MessageContent
-]
+  intents:[
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
 });
 
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 
-/* ---------------- FILE DATABASE ---------------- */
+/* ---------------- DATABASE ---------------- */
+const DB = {
+  levels:"levels.json",
+  economy:"economy.json",
+  warnings:"warnings.json",
+  config:"config.json"
+};
 
-const LEVEL_FILE="./levels.json";
-const ECON_FILE="./economy.json";
-const WARN_FILE="./warnings.json";
-const CONFIG_FILE="./config.json";
+let levels = fs.existsSync(DB.levels)?JSON.parse(fs.readFileSync(DB.levels)):{};
+let economy = fs.existsSync(DB.economy)?JSON.parse(fs.readFileSync(DB.economy)):{};
+let warnings = fs.existsSync(DB.warnings)?JSON.parse(fs.readFileSync(DB.warnings)):{};
+let config = fs.existsSync(DB.config)?JSON.parse(fs.readFileSync(DB.config)):{};
 
-let levels = fs.existsSync(LEVEL_FILE)?JSON.parse(fs.readFileSync(LEVEL_FILE)):{};
-let economy = fs.existsSync(ECON_FILE)?JSON.parse(fs.readFileSync(ECON_FILE)):{};
-let warnings = fs.existsSync(WARN_FILE)?JSON.parse(fs.readFileSync(WARN_FILE)):{};
-let config = fs.existsSync(CONFIG_FILE)?JSON.parse(fs.readFileSync(CONFIG_FILE)):{};
-
-function save(){
-fs.writeFileSync(LEVEL_FILE,JSON.stringify(levels,null,2));
-fs.writeFileSync(ECON_FILE,JSON.stringify(economy,null,2));
-fs.writeFileSync(WARN_FILE,JSON.stringify(warnings,null,2));
-fs.writeFileSync(CONFIG_FILE,JSON.stringify(config,null,2));
+function saveDB(){
+  fs.writeFileSync(DB.levels,JSON.stringify(levels,null,2));
+  fs.writeFileSync(DB.economy,JSON.stringify(economy,null,2));
+  fs.writeFileSync(DB.warnings,JSON.stringify(warnings,null,2));
+  fs.writeFileSync(DB.config,JSON.stringify(config,null,2));
 }
 
 function ensureUser(id){
-if(!economy[id]) economy[id]={cash:0,lastDaily:0};
+  if(!economy[id]) economy[id]={cash:0,lastDaily:0};
+  if(!levels[id]) levels[id]={xp:0,level:1};
+  if(!warnings[id]) warnings[id]=[];
 }
 
 /* ---------------- COMMANDS ---------------- */
-
-const commands=[
-
-new SlashCommandBuilder().setName("ping").setDescription("Bot ping"),
-
-new SlashCommandBuilder().setName("cash").setDescription("Check your money"),
-
-new SlashCommandBuilder().setName("daily").setDescription("Daily reward"),
-
-new SlashCommandBuilder().setName("work").setDescription("Work for money"),
-
-new SlashCommandBuilder()
-.setName("gamble")
-.setDescription("Gamble money")
-.addIntegerOption(o=>o.setName("amount").setRequired(true)),
-
-new SlashCommandBuilder()
-.setName("give")
-.setDescription("Give money")
-.addUserOption(o=>o.setName("user").setRequired(true))
-.addIntegerOption(o=>o.setName("amount").setRequired(true)),
-
-new SlashCommandBuilder()
-.setName("kick")
-.setDescription("Kick user")
-.addUserOption(o=>o.setName("user").setRequired(true)),
-
-new SlashCommandBuilder()
-.setName("ban")
-.setDescription("Ban user")
-.addUserOption(o=>o.setName("user").setRequired(true)),
-
-new SlashCommandBuilder()
-.setName("warn")
-.setDescription("Warn user")
-.addUserOption(o=>o.setName("user").setRequired(true))
-.addStringOption(o=>o.setName("reason").setRequired(true)),
-
-new SlashCommandBuilder()
-.setName("warnings")
-.setDescription("Check warnings")
-.addUserOption(o=>o.setName("user").setRequired(true)),
-
-new SlashCommandBuilder()
-.setName("ticket")
-.setDescription("Create support ticket"),
-
-new SlashCommandBuilder()
-.setName("close")
-.setDescription("Close ticket"),
-
-new SlashCommandBuilder()
-.setName("userinfo")
-.setDescription("User info")
-.addUserOption(o=>o.setName("user")),
-
-new SlashCommandBuilder()
-.setName("serverinfo")
-.setDescription("Server info"),
-
-new SlashCommandBuilder()
-.setName("setwelcome")
-.setDescription("Set welcome channel")
-.addChannelOption(o=>o.setName("channel").setRequired(true)),
-
-new SlashCommandBuilder()
-.setName("setautorole")
-.setDescription("Set autorole")
-.addRoleOption(o=>o.setName("role").setRequired(true))
-
+const commands = [
+  new SlashCommandBuilder().setName("ping").setDescription("Bot ping"),
+  new SlashCommandBuilder().setName("cash").setDescription("Check cash"),
+  new SlashCommandBuilder().setName("daily").setDescription("Claim daily"),
+  new SlashCommandBuilder().setName("work").setDescription("Work for money"),
+  new SlashCommandBuilder().setName("give").setDescription("Give money").addUserOption(o=>o.setName("user").setRequired(true)).addIntegerOption(o=>o.setName("amount").setRequired(true)),
+  new SlashCommandBuilder().setName("gamble").setDescription("Gamble").addIntegerOption(o=>o.setName("amount").setRequired(true)),
+  new SlashCommandBuilder().setName("addxp").setDescription("Add XP to user").addUserOption(o=>o.setName("user").setRequired(true)).addIntegerOption(o=>o.setName("amount").setRequired(true)),
+  new SlashCommandBuilder().setName("removexp").setDescription("Remove XP from user").addUserOption(o=>o.setName("user").setRequired(true)).addIntegerOption(o=>o.setName("amount").setRequired(true)),
+  new SlashCommandBuilder().setName("setxpchannel").setDescription("Set XP log channel").addChannelOption(o=>o.setName("channel").setRequired(true)),
+  new SlashCommandBuilder().setName("setwelcome").setDescription("Set welcome channel").addChannelOption(o=>o.setName("channel").setRequired(true)),
+  new SlashCommandBuilder().setName("addcash").setDescription("Add cash").addUserOption(o=>o.setName("user").setRequired(true)).addIntegerOption(o=>o.setName("amount").setRequired(true)),
+  new SlashCommandBuilder().setName("removecash").setDescription("Remove cash").addUserOption(o=>o.setName("user").setRequired(true)).addIntegerOption(o=>o.setName("amount").setRequired(true)),
 ].map(c=>c.toJSON());
 
 /* ---------------- REGISTER COMMANDS ---------------- */
-
 const rest = new REST({version:"10"}).setToken(TOKEN);
-
 (async()=>{
-try{
-await rest.put(Routes.applicationCommands(CLIENT_ID),{body:commands});
-console.log("Commands registered");
-}catch(err){console.log(err);}
+  try{
+    await rest.put(Routes.applicationCommands(CLIENT_ID),{body:commands});
+    console.log("Commands registered");
+  }catch(e){console.log(e);}
 })();
 
 /* ---------------- READY ---------------- */
-
 client.once("ready",()=>{
-console.log("Bot online");
-console.log("Logged in as "+client.user.tag);
+  console.log("GOD v3.1 ONLINE");
+  console.log("Logged in as "+client.user.tag);
 });
 
-/* ---------------- WELCOME SYSTEM ---------------- */
-
-client.on("guildMemberAdd",member=>{
-
-if(config.autorole){
-const role = member.guild.roles.cache.get(config.autorole);
-if(role) member.roles.add(role);
-}
-
-const channel = member.guild.channels.cache.get(config.welcome);
-if(!channel) return;
-
-const welcome = new EmbedBuilder()
-.setColor("#00ffcc")
-.setTitle("🎉 Welcome!")
-.setDescription(`Welcome ${member} to **${member.guild.name}**
-Make sure to read rules #rules
-Enjoy your stay!`)
-.setFooter({text:`Member #${member.guild.memberCount}`});
-
-const rules = new EmbedBuilder()
-.setColor("#2f3136")
-.setTitle("📜 Discord Server Rules")
-.setDescription(`
-1. Respect Everyone
-2. No Spamming
-3. Keep Content Appropriate
-4. Respect Privacy
-5. No Advertising
-6. Follow Staff Instructions
-7. No Impersonation
-9. Have Fun 🎉
-`);
-
-channel.send({embeds:[welcome]});
-channel.send({embeds:[rules]});
-
+/* ---------------- WELCOME & AUTOROLE ---------------- */
+client.on("guildMemberAdd", member=>{
+  if(config.autorole){
+    const role = member.guild.roles.cache.get(config.autorole);
+    if(role) member.roles.add(role);
+  }
+  const channel = member.guild.channels.cache.get(config.welcome);
+  if(!channel) return;
+  const embed = new EmbedBuilder()
+    .setColor("Green")
+    .setTitle("🎉 Welcome!")
+    .setDescription(`Welcome ${member} to **${member.guild.name}**\nMake sure to read #rules`);
+  channel.send({embeds:[embed]});
 });
 
-/* ---------------- MESSAGE COMMANDS ---------------- */
+/* ---------------- XP SYSTEM ---------------- */
+const xpCooldown = new Set();
+client.on("messageCreate",message=>{
+  if(message.author.bot) return;
+  ensureUser(message.author.id);
 
-const xpCooldown=new Set();
+  if(xpCooldown.has(message.author.id)) return;
 
-client.on("messageCreate",async message=>{
+  levels[message.author.id].xp += 5;
+  const level = levels[message.author.id].level;
+  if(levels[message.author.id].xp >= level*100){
+    levels[message.author.id].level++;
+    levels[message.author.id].xp = 0;
+    // Send to xp channel if set
+    if(config.xpchannel){
+      const xpChan = message.guild.channels.cache.get(config.xpchannel);
+      if(xpChan) xpChan.send(`${message.author} reached level ${levels[message.author.id].level}!`);
+    }
+  }
 
-if(message.author.bot) return;
-
-/* RULES */
-
-if(message.content.toLowerCase()==="?rules"){
-
-const embed=new EmbedBuilder()
-.setTitle("📜 Rules")
-.setDescription("Respect everyone\nNo spam\nNo NSFW\nFollow staff");
-
-message.channel.send({embeds:[embed]});
-
-}
-
-/* CLEAR */
-
-if(message.content.startsWith("?clear")){
-
-if(!message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) return;
-
-const amount=message.content.split(" ")[1];
-
-message.channel.bulkDelete(amount);
-
-}
-
-/* LEVEL SYSTEM */
-
-if(!levels[message.author.id]) levels[message.author.id]={xp:0,level:1};
-
-if(xpCooldown.has(message.author.id)) return;
-
-levels[message.author.id].xp+=5;
-
-if(levels[message.author.id].xp>=levels[message.author.id].level*100){
-
-levels[message.author.id].level++;
-levels[message.author.id].xp=0;
-
-message.channel.send(`${message.author} reached level ${levels[message.author.id].level}`);
-
-}
-
-xpCooldown.add(message.author.id);
-setTimeout(()=>xpCooldown.delete(message.author.id),60000);
-
-save();
-
+  xpCooldown.add(message.author.id);
+  setTimeout(()=>xpCooldown.delete(message.author.id),60000);
+  saveDB();
 });
 
 /* ---------------- INTERACTIONS ---------------- */
+client.on("interactionCreate", async interaction=>{
+  if(interaction.type !== InteractionType.ApplicationCommand) return;
+  ensureUser(interaction.user.id);
 
-client.on("interactionCreate",async interaction=>{
+  const cmd = interaction.commandName;
 
-if(!interaction.isChatInputCommand()) return;
+  /* ---------------- ADMIN XP/CASH ---------------- */
+  if(cmd==="addxp"){
+    if(!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply("No perms");
+    const user = interaction.options.getUser("user");
+    const amount = interaction.options.getInteger("amount");
+    ensureUser(user.id);
+    levels[user.id].xp += amount;
+    interaction.reply(`Added ${amount} XP to ${user.tag}`);
+    saveDB();
+  }
 
-const cmd=interaction.commandName;
+  if(cmd==="removexp"){
+    if(!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply("No perms");
+    const user = interaction.options.getUser("user");
+    const amount = interaction.options.getInteger("amount");
+    ensureUser(user.id);
+    levels[user.id].xp -= amount;
+    if(levels[user.id].xp<0) levels[user.id].xp=0;
+    interaction.reply(`Removed ${amount} XP from ${user.tag}`);
+    saveDB();
+  }
 
-/* PING */
+  if(cmd==="addcash"){
+    if(!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply("No perms");
+    const user = interaction.options.getUser("user");
+    const amount = interaction.options.getInteger("amount");
+    ensureUser(user.id);
+    economy[user.id].cash += amount;
+    interaction.reply(`Added $${amount} to ${user.tag}`);
+    saveDB();
+  }
 
-if(cmd==="ping") return interaction.reply("🏓 "+client.ws.ping+"ms");
+  if(cmd==="removecash"){
+    if(!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply("No perms");
+    const user = interaction.options.getUser("user");
+    const amount = interaction.options.getInteger("amount");
+    ensureUser(user.id);
+    economy[user.id].cash -= amount;
+    if(economy[user.id].cash<0) economy[user.id].cash=0;
+    interaction.reply(`Removed $${amount} from ${user.tag}`);
+    saveDB();
+  }
 
-/* CASH */
+  /* ---------------- CONFIG COMMANDS ---------------- */
+  if(cmd==="setxpchannel"){
+    if(!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply("No perms");
+    const channel = interaction.options.getChannel("channel");
+    config.xpchannel = channel.id;
+    saveDB();
+    interaction.reply(`XP notifications set to ${channel}`);
+  }
 
-if(cmd==="cash"){
+  if(cmd==="setwelcome"){
+    if(!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply("No perms");
+    const channel = interaction.options.getChannel("channel");
+    config.welcome = channel.id;
+    saveDB();
+    interaction.reply(`Welcome channel set to ${channel}`);
+  }
 
-ensureUser(interaction.user.id);
-
-return interaction.reply("💰 $"+economy[interaction.user.id].cash);
-
-}
-
-/* DAILY */
-
-if(cmd==="daily"){
-
-ensureUser(interaction.user.id);
-
-const now=Date.now();
-
-if(now-economy[interaction.user.id].lastDaily<86400000)
-return interaction.reply("Come back tomorrow");
-
-economy[interaction.user.id].lastDaily=now;
-economy[interaction.user.id].cash+=200;
-
-save();
-
-return interaction.reply("You got $200");
-
-}
-
-/* WORK */
-
-if(cmd==="work"){
-
-ensureUser(interaction.user.id);
-
-const money=Math.floor(Math.random()*200)+50;
-
-economy[interaction.user.id].cash+=money;
-
-save();
-
-return interaction.reply("You earned $"+money);
-
-}
-
-/* GAMBLE */
-
-if(cmd==="gamble"){
-
-const bet=interaction.options.getInteger("amount");
-
-ensureUser(interaction.user.id);
-
-if(economy[interaction.user.id].cash<bet)
-return interaction.reply("Not enough money");
-
-if(Math.random()>0.5){
-
-economy[interaction.user.id].cash+=bet;
-
-interaction.reply("You won $"+bet);
-
-}else{
-
-economy[interaction.user.id].cash-=bet;
-
-interaction.reply("You lost $"+bet);
-
-}
-
-save();
-
-}
-
-/* TICKET */
-
-if(cmd==="ticket"){
-
-const channel=await interaction.guild.channels.create({
-name:"ticket-"+interaction.user.username,
-type:ChannelType.GuildText
-});
-
-channel.send("Support will be with you soon "+interaction.user);
-
-interaction.reply({content:"Ticket created "+channel,ephemeral:true});
-
-}
-
-/* CLOSE */
-
-if(cmd==="close"){
-
-interaction.channel.delete();
-
-}
+  /* ---------------- USER COMMANDS ---------------- */
+  if(cmd==="ping") interaction.reply("🏓 Pong "+client.ws.ping+"ms");
+  if(cmd==="cash") interaction.reply("💰 $"+economy[interaction.user.id].cash);
+  if(cmd==="daily"){
+    const now = Date.now();
+    if(now - economy[interaction.user.id].lastDaily < 86400000) return interaction.reply("Come back tomorrow");
+    economy[interaction.user.id].lastDaily = now;
+    economy[interaction.user.id].cash += 200;
+    saveDB();
+    interaction.reply("You got $200!");
+  }
+  if(cmd==="work"){
+    const money = Math.floor(Math.random()*200)+50;
+    economy[interaction.user.id].cash += money;
+    saveDB();
+    interaction.reply("You earned $"+money);
+  }
+  if(cmd==="gamble"){
+    const bet = interaction.options.getInteger("amount");
+    if(economy[interaction.user.id].cash < bet) return interaction.reply("Not enough money");
+    if(Math.random()>0.5){ economy[interaction.user.id].cash += bet; interaction.reply("You won $"+bet); }
+    else{ economy[interaction.user.id].cash -= bet; interaction.reply("You lost $"+bet); }
+    saveDB();
+  }
+  if(cmd==="give"){
+    const user = interaction.options.getUser("user");
+    const amount = interaction.options.getInteger("amount");
+    if(economy[interaction.user.id].cash < amount) return interaction.reply("Not enough money");
+    ensureUser(user.id);
+    economy[interaction.user.id].cash -= amount;
+    economy[user.id].cash += amount;
+    saveDB();
+    interaction.reply(`You gave ${user.tag} $${amount}`);
+  }
 
 });
-
-/* ---------------- LOGIN ---------------- */
 
 client.login(TOKEN);
-```
