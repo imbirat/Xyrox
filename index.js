@@ -3,7 +3,7 @@ const {
   Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField, REST, Routes, SlashCommandBuilder
 } = require('discord.js');
 
-const { QuickDB } = require('@louislam/quick.db'); // <-- Updated DB
+const { QuickDB } = require('@louislam/quick.db');
 const db = new QuickDB();
 
 const client = new Client({
@@ -42,6 +42,10 @@ const commands = [
     .setName("setwelcomechannel")
     .setDescription("Set the welcome channel")
     .addChannelOption(o => o.setName("channel").setDescription("Select the welcome channel").setRequired(true)),
+  new SlashCommandBuilder()
+    .setName("setxpchannel")
+    .setDescription("Set the channel where XP level-up messages are sent")
+    .addChannelOption(o => o.setName("channel").setDescription("Select the XP channel").setRequired(true)),
   new SlashCommandBuilder()
     .setName("ban")
     .setDescription("Ban a user")
@@ -98,21 +102,23 @@ Make sure to read rules <#rules-channel>
   channel.send({ embeds: [embed] });
 });
 
-// ================= LEVEL SYSTEM =================
+// ================= LEVELING & PREFIX COMMANDS =================
 client.on("messageCreate", async message => {
   if (message.author.bot) return;
 
-  // XP
+  // XP system
   let xp = await db.get(`xp_${message.author.id}`) || 0;
   xp += 10;
   let level = Math.floor(0.1 * Math.sqrt(xp));
   await db.set(`xp_${message.author.id}`, xp);
 
   if (xp % 100 === 0) {
-    message.channel.send(`🎉 ${message.author} you have reached level ${level}`);
+    const xpChannelId = await db.get(`xpchannel_${message.guild.id}`);
+    const xpChannel = message.guild.channels.cache.get(xpChannelId) || message.channel;
+    xpChannel.send(`🎉 ${message.author} you have reached level ${level}`);
   }
 
-  // Prefix Commands
+  // PREFIX COMMANDS
   if (!message.content.startsWith(PREFIX)) return;
   const args = message.content.slice(PREFIX.length).trim().split(/ +/);
   const cmd = args.shift().toLowerCase();
@@ -120,9 +126,20 @@ client.on("messageCreate", async message => {
   if (cmd === "ping") {
     message.reply(`🏓 Pong! Latency is ${Date.now() - message.createdTimestamp}ms`);
   }
+
+  if (cmd === "setxpchannel") {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator))
+      return message.reply("❌ You need Admin permissions!");
+    
+    const channel = message.mentions.channels.first();
+    if (!channel) return message.reply("❌ Please mention a channel!");
+
+    await db.set(`xpchannel_${message.guild.id}`, channel.id);
+    message.reply(`✅ XP level-up messages will now be sent in ${channel}`);
+  }
 });
 
-// ================= SLASH COMMAND HANDLER =================
+// ================= INTERACTIONS (SLASH COMMANDS) =================
 client.on("interactionCreate", async interaction => {
   if (!interaction.isCommand()) return;
   const { commandName, options } = interaction;
@@ -140,7 +157,7 @@ client.on("interactionCreate", async interaction => {
 /profile
 
 🛠 Admin:
-/ban /kick /mute /unmute /setwelcomechannel
+/ban /kick /mute /unmute /setwelcomechannel /setxpchannel
 
 📜 Info:
 /rules
@@ -186,9 +203,9 @@ client.on("interactionCreate", async interaction => {
   }
 
   if (commandName === "give") {
-    let user = options.getUser("user");
-    let amount = options.getInteger("amount");
-    let sender = await db.get(`money_${interaction.user.id}`) || 0;
+    const user = options.getUser("user");
+    const amount = options.getInteger("amount");
+    const sender = await db.get(`money_${interaction.user.id}`) || 0;
     if (sender < amount) return interaction.reply("❌ Not enough money");
 
     await db.add(`money_${user.id}`, amount);
@@ -197,16 +214,16 @@ client.on("interactionCreate", async interaction => {
   }
 
   if (commandName === "rob") {
-    let user = options.getUser("user");
-    let amount = Math.floor(Math.random() * 300);
+    const user = options.getUser("user");
+    const amount = Math.floor(Math.random() * 300);
     await db.sub(`money_${user.id}`, amount);
     await db.add(`money_${interaction.user.id}`, amount);
     return interaction.reply(`🕵️ You robbed ${amount} coins from ${user}`);
   }
 
   if (commandName === "gamble") {
-    let amount = options.getInteger("amount");
-    let win = Math.random() > 0.5;
+    const amount = options.getInteger("amount");
+    const win = Math.random() > 0.5;
     if (win) {
       await db.add(`money_${interaction.user.id}`, amount);
       return interaction.reply("🎉 You won!");
@@ -217,16 +234,16 @@ client.on("interactionCreate", async interaction => {
   }
 
   if (commandName === "fish") {
-    let amount = Math.floor(Math.random() * 200);
+    const amount = Math.floor(Math.random() * 200);
     await db.add(`money_${interaction.user.id}`, amount);
     return interaction.reply(`🎣 You earned ${amount} coins`);
   }
 
   // PROFILE
   if (commandName === "profile") {
-    let xp = await db.get(`xp_${interaction.user.id}`) || 0;
-    let money = await db.get(`money_${interaction.user.id}`) || 0;
-    let level = Math.floor(0.1 * Math.sqrt(xp));
+    const xp = await db.get(`xp_${interaction.user.id}`) || 0;
+    const money = await db.get(`money_${interaction.user.id}`) || 0;
+    const level = Math.floor(0.1 * Math.sqrt(xp));
 
     const embed = new EmbedBuilder()
       .setColor("Purple")
@@ -236,20 +253,30 @@ client.on("interactionCreate", async interaction => {
     return interaction.reply({ embeds: [embed] });
   }
 
-  // ADMIN
+  // SET WELCOME CHANNEL
   if (commandName === "setwelcomechannel") {
     if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator))
       return interaction.reply("❌ You need Admin perms!");
-    let channel = options.getChannel("channel");
+    const channel = options.getChannel("channel");
     await db.set(`welcome_${interaction.guild.id}`, channel.id);
     return interaction.reply("✅ Welcome channel set!");
   }
 
+  // SET XP CHANNEL
+  if (commandName === "setxpchannel") {
+    if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator))
+      return interaction.reply("❌ You need Admin perms!");
+    const channel = options.getChannel("channel");
+    await db.set(`xpchannel_${interaction.guild.id}`, channel.id);
+    return interaction.reply(`✅ XP level-up messages will now be sent in ${channel}`);
+  }
+
+  // ADMIN
   if (commandName === "ban") {
     if (!interaction.member.permissions.has(PermissionsBitField.Flags.BanMembers))
       return interaction.reply("❌ You need Ban perms!");
-    let user = options.getUser("user");
-    let member = await interaction.guild.members.fetch(user.id);
+    const user = options.getUser("user");
+    const member = await interaction.guild.members.fetch(user.id);
     member.ban();
     return interaction.reply(`🔨 ${user.username} banned`);
   }
@@ -257,22 +284,22 @@ client.on("interactionCreate", async interaction => {
   if (commandName === "kick") {
     if (!interaction.member.permissions.has(PermissionsBitField.Flags.KickMembers))
       return interaction.reply("❌ You need Kick perms!");
-    let user = options.getUser("user");
-    let member = await interaction.guild.members.fetch(user.id);
+    const user = options.getUser("user");
+    const member = await interaction.guild.members.fetch(user.id);
     member.kick();
     return interaction.reply(`👢 ${user.username} kicked`);
   }
 
   if (commandName === "mute") {
-    let user = options.getUser("user");
-    let member = await interaction.guild.members.fetch(user.id);
+    const user = options.getUser("user");
+    const member = await interaction.guild.members.fetch(user.id);
     await member.timeout(600000);
     return interaction.reply(`🔇 ${user.username} muted for 10min`);
   }
 
   if (commandName === "unmute") {
-    let user = options.getUser("user");
-    let member = await interaction.guild.members.fetch(user.id);
+    const user = options.getUser("user");
+    const member = await interaction.guild.members.fetch(user.id);
     await member.timeout(null);
     return interaction.reply(`🔊 ${user.username} unmuted`);
   }
