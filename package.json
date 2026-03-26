@@ -1,17 +1,21 @@
 {
-  "name": "nodejs",
+  "name": "xyrix-bot",
   "version": "1.0.0",
-  "description": "",
+  "description": "Advanced Discord Bot with economy, moderation, welcome system",
   "main": "index.js",
+  "type": "commonjs",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": ["discord", "bot", "economy", "moderation"],
+  "author": "xyrix",
+  "license": "MIT",
   "dependencies": {
-    "@types/node": "^22.13.11",
-    "discord.js": "^14.25.1",
-    "express": "^5.2.1"
+    "discord.js": "^14.14.1",
+    "express": "^4.19.2",
+    "quick.db": "^9.1.7",
+    "axios": "^1.6.8",
+    "ms": "^2.1.3",
+    "dotenv": "^16.4.5"
   }
 }
