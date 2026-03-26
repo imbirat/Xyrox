@@ -5,10 +5,13 @@ const {
   Routes, 
   SlashCommandBuilder, 
   PermissionsBitField, 
-  EmbedBuilder 
+  EmbedBuilder,
+  AttachmentBuilder
 } = require('discord.js');
 const express = require('express');
 const fs = require('fs');
+const Canvas = require('canvas');
+const GIFEncoder = require('gifencoder');
 
 // ---------- EXPRESS ----------
 const app = express();
@@ -81,6 +84,8 @@ const commands = [
   new SlashCommandBuilder().setName("setwelcome").setDescription("Set welcome channel").addChannelOption(o=>o.setName("channel").setDescription("Channel").setRequired(true)),
   
   // --- Moderation ---
+  new SlashCommandBuilder().setName("clear").setDescription("Delete messages from a channel")
+    .addIntegerOption(o=>o.setName("amount").setDescription("Number of messages to delete (1-100)").setRequired(true).setMinValue(1).setMaxValue(100)),
   new SlashCommandBuilder().setName("announce").setDescription("Make an announcement").addStringOption(o=>o.setName("message").setDescription("Message").setRequired(true)),
   new SlashCommandBuilder().setName("kick").setDescription("Kick user").addUserOption(o=>o.setName("user").setDescription("User").setRequired(true)),
   new SlashCommandBuilder().setName("ban").setDescription("Ban user").addUserOption(o=>o.setName("user").setDescription("User").setRequired(true)),
@@ -148,25 +153,130 @@ client.on("guildMemberAdd", async member => {
 
   const memberCount = member.guild.memberCount;
 
-  const welcomeEmbed = new EmbedBuilder()
-    .setColor("Gold")
-    .setTitle(`🎉 WELCOME ${member.user.username}! 🎉`)
-    .setDescription(
-      `✨ ───────────────── ✨\n\n` +
-      `🔥 You joined **${member.guild.name}**\n` +
-      `💎 Enjoy your stay & have fun!\n\n` +
-      `🚀 Start chatting now\n` +
-      `📜 Read the rules\n` +
-      `🎯 Get your roles\n\n` +
-      `👥 Member #${memberCount}\n\n` +
-      `✨ ───────────────── ✨\n\n` +
-      `💥 We're glad to have you here! 💥`
-    )
-    .setThumbnail(member.user.displayAvatarURL({ dynamic: true, size: 256 }))
-    .setFooter({ text: `Member #${memberCount} • ${new Date(member.joinedTimestamp).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' })}, ${new Date(member.joinedTimestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` })
-    .setTimestamp(member.joinedAt);
+  try {
+    // Canvas size
+    const width = 700;
+    const height = 250;
 
-  channel.send({ embeds: [welcomeEmbed] });
+    // Setup GIF encoder
+    const encoder = new GIFEncoder(width, height);
+    encoder.start();
+    encoder.setRepeat(0);   // 0 = loop forever
+    encoder.setDelay(300);  // ms per frame
+    encoder.setQuality(10);
+
+    // Load avatar image once
+    const avatarURL = member.user.displayAvatarURL({ extension: 'png', size: 256 });
+    const avatarImg = await Canvas.loadImage(avatarURL);
+
+    // Generate 5 animated frames
+    for(let i = 0; i < 5; i++){
+      const canvas = Canvas.createCanvas(width, height);
+      const ctx = canvas.getContext('2d');
+
+      // Animated gradient background
+      const gradient = ctx.createLinearGradient(i * 20, 0, width, height);
+      gradient.addColorStop(0, '#ff7f50');
+      gradient.addColorStop(1, '#1e90ff');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, width, height);
+
+      // Decorative lines
+      ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+      ctx.lineWidth = 2;
+      for(let y = 0; y < height; y += 30){
+        ctx.beginPath();
+        ctx.moveTo(0, y + (i * 6));
+        ctx.lineTo(width, y + (i * 6));
+        ctx.stroke();
+      }
+
+      // Server name (top)
+      ctx.font = 'bold 18px Sans';
+      ctx.fillStyle = 'rgba(255,255,255,0.75)';
+      ctx.fillText(`Welcome to ${member.guild.name}`, 50, 50);
+
+      // Main welcome text
+      ctx.font = 'bold 38px Sans';
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowColor = 'rgba(0,0,0,0.5)';
+      ctx.shadowBlur = 8;
+      ctx.fillText(`${member.user.username}!`, 50, 105);
+      ctx.shadowBlur = 0;
+
+      // Description lines
+      ctx.font = '18px Sans';
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.fillText('💎 Enjoy your stay & have fun!', 50, 140);
+      ctx.fillText('🚀 Start chatting  📜 Read the rules  🎯 Get roles', 50, 168);
+      ctx.fillText(`👥 Member #${memberCount}`, 50, 196);
+
+      // Circular avatar (right side)
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(600, 125, 75, 0, Math.PI * 2, true);
+      ctx.closePath();
+      ctx.clip();
+      ctx.drawImage(avatarImg, 525, 50, 150, 150);
+      ctx.restore();
+
+      // Avatar ring
+      ctx.beginPath();
+      ctx.arc(600, 125, 76, 0, Math.PI * 2);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+
+      encoder.addFrame(ctx);
+    }
+
+    encoder.finish();
+
+    const buffer = encoder.out.getData();
+    const attachment = new AttachmentBuilder(buffer, { name: 'welcome.gif' });
+
+    const welcomeEmbed = new EmbedBuilder()
+      .setTitle('🎉 New Member Alert! 🎉')
+      .setDescription(
+        `✨ ───────────────── ✨\n\n` +
+        `Everyone welcome ${member} to **${member.guild.name}**!\n\n` +
+        `🔥 Enjoy your stay & have fun!\n` +
+        `🚀 Start chatting now\n` +
+        `📜 Read the rules\n` +
+        `🎯 Get your roles\n\n` +
+        `👥 Member #${memberCount}\n\n` +
+        `✨ ───────────────── ✨\n\n` +
+        `💥 We're glad to have you here! 💥`
+      )
+      .setColor('#00FFFF')
+      .setImage('attachment://welcome.gif')
+      .setFooter({ text: `Member #${memberCount} • ${new Date(member.joinedTimestamp).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' })}, ${new Date(member.joinedTimestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` })
+      .setTimestamp();
+
+    channel.send({ embeds: [welcomeEmbed], files: [attachment] });
+
+  } catch(err) {
+    console.error('Welcome GIF error:', err);
+    // Fallback: plain embed if canvas/gif fails
+    const fallbackEmbed = new EmbedBuilder()
+      .setColor("Gold")
+      .setTitle(`🎉 WELCOME ${member.user.username}! 🎉`)
+      .setDescription(
+        `✨ ───────────────── ✨\n\n` +
+        `🔥 You joined **${member.guild.name}**\n` +
+        `💎 Enjoy your stay & have fun!\n\n` +
+        `🚀 Start chatting now\n` +
+        `📜 Read the rules\n` +
+        `🎯 Get your roles\n\n` +
+        `👥 Member #${memberCount}\n\n` +
+        `✨ ───────────────── ✨\n\n` +
+        `💥 We're glad to have you here! 💥`
+      )
+      .setThumbnail(member.user.displayAvatarURL({ dynamic: true, size: 256 }))
+      .setFooter({ text: `Member #${memberCount}` })
+      .setTimestamp();
+    channel.send({ embeds: [fallbackEmbed] });
+  }
 });
 
 // ---------- MESSAGE COMMANDS (prefix: ?) ----------
@@ -232,6 +342,20 @@ client.on("interactionCreate", async interaction=>{
   const { commandName, guild, member } = interaction;
   const isAdmin = member.permissions.has(PermissionsBitField.Flags.Administrator);
 
+  // ---------- CLEAR ----------
+  if(commandName === "clear"){
+    if(!isAdmin && !member.permissions.has(PermissionsBitField.Flags.ManageMessages))
+      return interaction.reply({ content:"❌ You need **Manage Messages** permission.", ephemeral:true });
+    const amount = interaction.options.getInteger("amount");
+    await interaction.deferReply({ ephemeral: true });
+    try {
+      const deleted = await interaction.channel.bulkDelete(amount, true);
+      return interaction.editReply(`✅ Deleted **${deleted.size}** message(s).`);
+    } catch(err) {
+      return interaction.editReply("❌ Failed to delete messages. Messages older than 14 days cannot be bulk deleted.");
+    }
+  }
+
   // ---------- HELP ----------
   if(commandName === "help"){
     const embed = new EmbedBuilder()
@@ -239,7 +363,7 @@ client.on("interactionCreate", async interaction=>{
       .setColor("Blue")
       .setDescription("All commands")
       .addFields(
-        { name:"Moderation", value:"`/kick`, `/ban`, `/mute`, `/unmute`, `/warn`, `/warnings`, `/announce`" },
+        { name:"Moderation", value:"`/clear`, `/kick`, `/ban`, `/mute`, `/unmute`, `/warn`, `/warnings`, `/announce`" },
         { name:"Levels & XP", value:"`/level`, `/addxp`, `/removexp`, `/leaderboard`, `/setxpchannel`" },
         { name:"Economy", value:"`/cash`, `/daily`, `/give`, `/fish`, `/rob`, `/gamble`, `/shop`, `/buy`" },
         { name:"Utility", value:"`/afk`, `?rules`" }
