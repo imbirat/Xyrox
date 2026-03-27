@@ -5,7 +5,7 @@ const {
   Routes, 
   SlashCommandBuilder, 
   PermissionsBitField, 
-  EmbedBuilder 
+  EmbedBuilder
 } = require('discord.js');
 const express = require('express');
 const fs = require('fs');
@@ -76,7 +76,7 @@ const commands = [
     .addUserOption(o=>o.setName("user").setDescription("User").setRequired(true))
     .addIntegerOption(o=>o.setName("amount").setDescription("XP").setRequired(true)),
   new SlashCommandBuilder().setName("leaderboard").setDescription("Top 10 users by level"),
-  new SlashCommandBuilder().setName("setxpchannel").setDescription("Set XP channel").addChannelOption(o=>o.setName("channel").setDescription("Channel").setRequired(true)),
+  new SlashCommandBuilder().setName("setxpchannel").setDescription("Set channel where level-up notifications are sent").addChannelOption(o=>o.setName("channel").setDescription("Notification channel").setRequired(true)),
   new SlashCommandBuilder().setName("setautorole").setDescription("Set auto role").addRoleOption(o=>o.setName("role").setDescription("Role").setRequired(true)),
   new SlashCommandBuilder().setName("setwelcome").setDescription("Set welcome channel").addChannelOption(o=>o.setName("channel").setDescription("Channel").setRequired(true)),
   
@@ -117,15 +117,17 @@ client.once("ready", ()=>{
 });
 
 // ---------- HELPER FUNCTIONS ----------
+const xpCooldowns = new Map(); // userId -> last XP timestamp (in-memory, resets on restart)
+
 function addXP(guildId, userId, amount){
   if(!levels[guildId]) levels[guildId] = {};
   if(!levels[guildId][userId]) levels[guildId][userId] = { xp:0, level:1 };
   const userData = levels[guildId][userId];
   userData.xp += amount;
-  const nextLevel = userData.level*100;
-  if(userData.xp >= nextLevel){
+  const xpNeeded = userData.level * 100;
+  if(userData.xp >= xpNeeded){
     userData.level++;
-    userData.xp -= nextLevel;
+    userData.xp -= xpNeeded;
     saveData();
     return true; // leveled up
   }
@@ -133,6 +135,13 @@ function addXP(guildId, userId, amount){
   return false;
 }
 
+function xpOnCooldown(userId){
+  const now = Date.now();
+  const last = xpCooldowns.get(userId) || 0;
+  if(now - last < 60000) return true; // 60s cooldown
+  xpCooldowns.set(userId, now);
+  return false;
+}
 // ---------- WELCOME EVENT ----------
 client.on("guildMemberAdd", async member => {
   const guildId = member.guild.id;
@@ -154,14 +163,27 @@ client.on("guildMemberAdd", async member => {
     .setColor("Gold")
     .setTitle(`🎉 WELCOME ${member.user.username}! 🎉`)
     .setDescription(
-      `✨ ───────────────── ✨\n\n` +
-      `🔥 You joined **${member.guild.name}**\n` +
-      `💎 Enjoy your stay & have fun!\n\n` +
-      `🚀 Start chatting now\n` +
-      `📜 Read the rules\n` +
-      `🎯 Get your roles\n\n` +
-      `👥 Member #${memberCount}\n\n` +
-      `✨ ───────────────── ✨\n\n` +
+      `✨ ───────────────── ✨
+
+` +
+      `🔥 You joined **${member.guild.name}**
+` +
+      `💎 Enjoy your stay & have fun!
+
+` +
+      `🚀 Start chatting now
+` +
+      `📜 Read the rules
+` +
+      `🎯 Get your roles
+
+` +
+      `👥 Member #${memberCount}
+
+` +
+      `✨ ───────────────── ✨
+
+` +
       `💥 We're glad to have you here! 💥`
     )
     .setThumbnail(member.user.displayAvatarURL({ dynamic: true, size: 256 }))
@@ -190,17 +212,27 @@ client.on("messageCreate", async message => {
     message.reply("✅ Welcome back! Your AFK has been removed.").then(m => setTimeout(() => m.delete(), 5000));
   }
 
-  // XP gain
+  // XP gain — works in all channels
   const guildId = message.guild?.id;
   const userId = message.author.id;
-  if(guildId){
-    if(!xpChannels[guildId] || xpChannels[guildId] === message.channel.id){
-      const xpGain = Math.floor(Math.random() * 10) + 5;
-      const leveledUp = addXP(guildId, userId, xpGain);
-      if(leveledUp){
-        const lvl = levels[guildId][userId].level;
-        message.channel.send(`🎉 ${message.author}, you leveled up to **Level ${lvl}**!`);
-      }
+  if(guildId && !xpOnCooldown(userId)){
+    const xpGain = Math.floor(Math.random() * 10) + 5;
+    const leveledUp = addXP(guildId, userId, xpGain);
+    if(leveledUp){
+      const lvl = levels[guildId][userId].level;
+      const levelUpMsg = new (require('discord.js').EmbedBuilder)()
+        .setColor("Gold")
+        .setTitle("🎁 Level Up!")
+        .setDescription(`🎉 ${message.author} just leveled up to **Level ${lvl}**!
+📈 Keep chatting to reach the next level!`)
+        .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
+        .setTimestamp();
+      // Send to xpChannel if set, otherwise reply in current channel
+      const notifyChannelId = xpChannels[guildId];
+      const notifyChannel = notifyChannelId
+        ? message.guild.channels.cache.get(notifyChannelId)
+        : message.channel;
+      if(notifyChannel) notifyChannel.send({ embeds: [levelUpMsg] });
     }
   }
 
@@ -313,7 +345,70 @@ client.on("interactionCreate", async interaction=>{
     const channel = interaction.options.getChannel("channel");
     xpChannels[guild.id] = channel.id;
     saveData();
-    return interaction.reply(`✅ XP channel set to ${channel}`);
+    return interaction.reply(`✅ Level-up notifications will now be sent to ${channel}.
+📢 XP is still earned in **all channels** — only the notification goes there.`);
+  }
+
+  // ---------- ADDXP ----------
+  if(commandName === "addxp"){
+    if(!isAdmin) return interaction.reply({ content:"❌ Admins only.", ephemeral:true });
+    const target = interaction.options.getUser("user");
+    const amount = interaction.options.getInteger("amount");
+    if(amount <= 0) return interaction.reply({ content:"❌ Amount must be greater than 0.", ephemeral:true });
+    if(!levels[guild.id]) levels[guild.id] = {};
+    if(!levels[guild.id][target.id]) levels[guild.id][target.id] = { xp:0, level:1 };
+    const leveled = addXP(guild.id, target.id, amount);
+    const data = levels[guild.id][target.id];
+    return interaction.reply(`✅ Added **${amount} XP** to ${target.tag}.\nThey are now **Level ${data.level}** with **${data.xp}/${data.level*100} XP**.${leveled ? ' 🎉 They leveled up!' : ''}`);
+  }
+
+  // ---------- REMOVEXP ----------
+  if(commandName === "removexp"){
+    if(!isAdmin) return interaction.reply({ content:"❌ Admins only.", ephemeral:true });
+    const target = interaction.options.getUser("user");
+    const amount = interaction.options.getInteger("amount");
+    if(amount <= 0) return interaction.reply({ content:"❌ Amount must be greater than 0.", ephemeral:true });
+    if(!levels[guild.id]) levels[guild.id] = {};
+    if(!levels[guild.id][target.id]) levels[guild.id][target.id] = { xp:0, level:1 };
+    const userData = levels[guild.id][target.id];
+    userData.xp -= amount;
+    // Handle XP going negative — drop a level if needed
+    while(userData.xp < 0 && userData.level > 1){
+      userData.level--;
+      userData.xp += userData.level * 100;
+    }
+    if(userData.xp < 0) userData.xp = 0; // Can't go below level 1 with 0 XP
+    saveData();
+    return interaction.reply(`✅ Removed **${amount} XP** from ${target.tag}.\nThey are now **Level ${userData.level}** with **${userData.xp}/${userData.level*100} XP**.`);
+  }
+
+  // ---------- LEADERBOARD ----------
+  if(commandName === "leaderboard"){
+    if(!levels[guild.id] || Object.keys(levels[guild.id]).length === 0)
+      return interaction.reply("❌ No XP data for this server yet.");
+
+    // Sort by level desc, then XP desc
+    const sorted = Object.entries(levels[guild.id])
+      .sort(([,a],[,b]) => b.level !== a.level ? b.level - a.level : b.xp - a.xp)
+      .slice(0, 10);
+
+    const medals = ['🥇','🥈','🥉'];
+    let desc = '';
+    for(let i = 0; i < sorted.length; i++){
+      const [userId, data] = sorted[i];
+      let tag;
+      try { const u = await client.users.fetch(userId); tag = u.tag; }
+      catch { tag = `Unknown User`; }
+      const rank = medals[i] || `**#${i+1}**`;
+      desc += `${rank} ${tag} — Level **${data.level}** (${data.xp}/${data.level*100} XP)\n`;
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle(`🏆 ${guild.name} XP Leaderboard`)
+      .setColor("Gold")
+      .setDescription(desc)
+      .setTimestamp();
+    return interaction.reply({ embeds:[embed] });
   }
 
   // ---------- ECONOMY ----------
