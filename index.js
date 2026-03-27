@@ -29,36 +29,75 @@ const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 
 // ---------- DATA FILES ----------
-const LEVELS_FILE = './levels.json';
-const WARNINGS_FILE = './warnings.json';
-const XPCHANNELS_FILE = './xpChannels.json';
-const AFK_FILE = './afk.json';
-const AUTOROLE_FILE = './autoroles.json';
-const WELCOME_FILE = './welcome.json';
-const ECON_FILE = './economy.json';
-const SHOP_FILE = './shop.json';
+const LEVELS_FILE    = './levels.json';
+const WARNINGS_FILE  = './warnings.json';
+const XPCHANNELS_FILE= './xpChannels.json';
+const AFK_FILE       = './afk.json';
+const AUTOROLE_FILE  = './autoroles.json';
+const WELCOME_FILE   = './welcome.json';
+const ECON_FILE      = './economy.json';
+const SHOP_FILE      = './shop.json';
+const AUTOMOD_FILE   = './automod.json';
 
-let levels = fs.existsSync(LEVELS_FILE) ? JSON.parse(fs.readFileSync(LEVELS_FILE)) : {};
-let warnings = fs.existsSync(WARNINGS_FILE) ? JSON.parse(fs.readFileSync(WARNINGS_FILE)) : {};
-let xpChannels = fs.existsSync(XPCHANNELS_FILE) ? JSON.parse(fs.readFileSync(XPCHANNELS_FILE)) : {};
-let afkData = fs.existsSync(AFK_FILE) ? JSON.parse(fs.readFileSync(AFK_FILE)) : {};
-let autoRoles = fs.existsSync(AUTOROLE_FILE) ? JSON.parse(fs.readFileSync(AUTOROLE_FILE)) : {};
-let welcomeChannels = fs.existsSync(WELCOME_FILE) ? JSON.parse(fs.readFileSync(WELCOME_FILE)) : {};
-let economy = fs.existsSync(ECON_FILE) ? JSON.parse(fs.readFileSync(ECON_FILE)) : {};
-let shop = fs.existsSync(SHOP_FILE) ? JSON.parse(fs.readFileSync(SHOP_FILE)) : {};
+let levels         = fs.existsSync(LEVELS_FILE)    ? JSON.parse(fs.readFileSync(LEVELS_FILE))    : {};
+let warnings       = fs.existsSync(WARNINGS_FILE)  ? JSON.parse(fs.readFileSync(WARNINGS_FILE))  : {};
+let xpChannels     = fs.existsSync(XPCHANNELS_FILE)? JSON.parse(fs.readFileSync(XPCHANNELS_FILE)): {};
+let afkData        = fs.existsSync(AFK_FILE)       ? JSON.parse(fs.readFileSync(AFK_FILE))       : {};
+let autoRoles      = fs.existsSync(AUTOROLE_FILE)  ? JSON.parse(fs.readFileSync(AUTOROLE_FILE))  : {};
+let welcomeChannels= fs.existsSync(WELCOME_FILE)   ? JSON.parse(fs.readFileSync(WELCOME_FILE))   : {};
+let economy        = fs.existsSync(ECON_FILE)      ? JSON.parse(fs.readFileSync(ECON_FILE))      : {};
+let shop           = fs.existsSync(SHOP_FILE)      ? JSON.parse(fs.readFileSync(SHOP_FILE))      : {};
+
+// automod structure per guild:
+// { enabled, logChannel, blockedWords[], blockLinks, spamLimit }
+let automodConfig  = fs.existsSync(AUTOMOD_FILE)   ? JSON.parse(fs.readFileSync(AUTOMOD_FILE))   : {};
 
 // ---------- SAVE FUNCTIONS ----------
 function saveData(){
-  fs.writeFileSync(LEVELS_FILE, JSON.stringify(levels, null, 2));
-  fs.writeFileSync(WARNINGS_FILE, JSON.stringify(warnings, null, 2));
-  fs.writeFileSync(XPCHANNELS_FILE, JSON.stringify(xpChannels, null, 2));
-  fs.writeFileSync(AFK_FILE, JSON.stringify(afkData, null, 2));
-  fs.writeFileSync(AUTOROLE_FILE, JSON.stringify(autoRoles, null, 2));
-  fs.writeFileSync(WELCOME_FILE, JSON.stringify(welcomeChannels, null, 2));
+  fs.writeFileSync(LEVELS_FILE,    JSON.stringify(levels, null, 2));
+  fs.writeFileSync(WARNINGS_FILE,  JSON.stringify(warnings, null, 2));
+  fs.writeFileSync(XPCHANNELS_FILE,JSON.stringify(xpChannels, null, 2));
+  fs.writeFileSync(AFK_FILE,       JSON.stringify(afkData, null, 2));
+  fs.writeFileSync(AUTOROLE_FILE,  JSON.stringify(autoRoles, null, 2));
+  fs.writeFileSync(WELCOME_FILE,   JSON.stringify(welcomeChannels, null, 2));
 }
-function saveEconomy() { fs.writeFileSync(ECON_FILE, JSON.stringify(economy, null, 2)); }
-function saveShop() { fs.writeFileSync(SHOP_FILE, JSON.stringify(shop, null, 2)); }
-function ensureUser(id){ if(!economy[id]) economy[id] = { cash:0, lastDaily:0, inventory: [] }; }
+function saveEconomy()  { fs.writeFileSync(ECON_FILE,    JSON.stringify(economy, null, 2)); }
+function saveShop()     { fs.writeFileSync(SHOP_FILE,    JSON.stringify(shop, null, 2)); }
+function saveAutomod()  { fs.writeFileSync(AUTOMOD_FILE, JSON.stringify(automodConfig, null, 2)); }
+function ensureUser(id) { if(!economy[id]) economy[id] = { cash:0, lastDaily:0, inventory:[] }; }
+
+// ---------- AUTOMOD HELPERS ----------
+function getAutomod(guildId) {
+  if (!automodConfig[guildId]) {
+    automodConfig[guildId] = {
+      enabled: false,
+      logChannel: null,
+      blockedWords: [],
+      blockLinks: false,
+      spamLimit: 5
+    };
+  }
+  return automodConfig[guildId];
+}
+
+// Spam tracker: guildId -> userId -> [timestamps]
+const spamTracker = new Map();
+
+function trackSpam(guildId, userId) {
+  const key = `${guildId}:${userId}`;
+  const now = Date.now();
+  if (!spamTracker.has(key)) spamTracker.set(key, []);
+  const times = spamTracker.get(key).filter(t => now - t < 5000);
+  times.push(now);
+  spamTracker.set(key, times);
+  return times.length;
+}
+
+async function sendAutomodLog(guild, embed, cfg) {
+  if (!cfg.logChannel) return;
+  const ch = guild.channels.cache.get(cfg.logChannel);
+  if (ch) ch.send({ embeds: [embed] }).catch(() => {});
+}
 
 // ---------- SLASH COMMANDS ----------
 const commands = [
@@ -67,7 +106,7 @@ const commands = [
   new SlashCommandBuilder().setName("ping").setDescription("Check bot latency"),
   new SlashCommandBuilder().setName("afk").setDescription("Set yourself as AFK").addStringOption(o=>o.setName("reason").setDescription("Reason")),
   new SlashCommandBuilder().setName("level").setDescription("Check your level/profile").addUserOption(o=>o.setName("user").setDescription("User to check")),
-  
+
   // --- XP Commands ---
   new SlashCommandBuilder().setName("addxp").setDescription("Add XP to a user")
     .addUserOption(o=>o.setName("user").setDescription("User").setRequired(true))
@@ -79,7 +118,7 @@ const commands = [
   new SlashCommandBuilder().setName("setxpchannel").setDescription("Set channel where level-up notifications are sent").addChannelOption(o=>o.setName("channel").setDescription("Notification channel").setRequired(true)),
   new SlashCommandBuilder().setName("setautorole").setDescription("Set auto role").addRoleOption(o=>o.setName("role").setDescription("Role").setRequired(true)),
   new SlashCommandBuilder().setName("setwelcome").setDescription("Set welcome channel").addChannelOption(o=>o.setName("channel").setDescription("Channel").setRequired(true)),
-  
+
   // --- Moderation ---
   new SlashCommandBuilder().setName("clear").setDescription("Delete messages from a channel")
     .addIntegerOption(o=>o.setName("amount").setDescription("Number of messages to delete (1-100)").setRequired(true).setMinValue(1).setMaxValue(100)),
@@ -100,26 +139,46 @@ const commands = [
   new SlashCommandBuilder().setName("gamble").setDescription("Gamble cash").addIntegerOption(o=>o.setName("amount").setDescription("Amount").setRequired(true)),
   new SlashCommandBuilder().setName("shop").setDescription("View shop items"),
   new SlashCommandBuilder().setName("buy").setDescription("Buy an item from the shop").addStringOption(o=>o.setName("item").setDescription("Item name").setRequired(true)),
+
+  // --- Auto Mod ---
+  new SlashCommandBuilder().setName("automod").setDescription("Configure auto-moderation")
+    .addSubcommand(sub => sub.setName("enable").setDescription("Enable auto-mod"))
+    .addSubcommand(sub => sub.setName("disable").setDescription("Disable auto-mod"))
+    .addSubcommand(sub => sub.setName("addword").setDescription("Add a blocked word")
+      .addStringOption(o => o.setName("word").setDescription("Word to block").setRequired(true)))
+    .addSubcommand(sub => sub.setName("removeword").setDescription("Remove a blocked word")
+      .addStringOption(o => o.setName("word").setDescription("Word to unblock").setRequired(true)))
+    .addSubcommand(sub => sub.setName("listwords").setDescription("List all blocked words"))
+    .addSubcommand(sub => sub.setName("setlog").setDescription("Set the auto-mod log channel")
+      .addChannelOption(o => o.setName("channel").setDescription("Log channel").setRequired(true)))
+    .addSubcommand(sub => sub.setName("setspam").setDescription("Set spam message limit (per 5s)")
+      .addIntegerOption(o => o.setName("limit").setDescription("Message limit (default 5)").setRequired(true).setMinValue(2).setMaxValue(20)))
+    .addSubcommand(sub => sub.setName("setlinks").setDescription("Toggle Discord invite link blocking")
+      .addBooleanOption(o => o.setName("enabled").setDescription("true = block links").setRequired(true)))
+    .addSubcommand(sub => sub.setName("status").setDescription("Show current auto-mod settings")),
+
 ].map(cmd => cmd.toJSON());
 
 // ---------- REGISTER COMMANDS ----------
 const rest = new REST({ version: '10' }).setToken(TOKEN);
-(async ()=>{try{
-  console.log("Registering commands...");
-  await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-  console.log("Commands registered!");
-}catch(err){console.error(err);}})();
+(async () => {
+  try {
+    console.log("Registering commands...");
+    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+    console.log("Commands registered!");
+  } catch(err) { console.error(err); }
+})();
 
 // ---------- READY ----------
-client.once("ready", ()=>{
+client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   client.user.setPresence({ status: 'idle', activities:[{ name: '/help | Xyrox', type: 0 }] });
 });
 
 // ---------- HELPER FUNCTIONS ----------
-const xpCooldowns = new Map(); // userId -> last XP timestamp (in-memory, resets on restart)
+const xpCooldowns = new Map();
 
-function addXP(guildId, userId, amount){
+function addXP(guildId, userId, amount) {
   if(!levels[guildId]) levels[guildId] = {};
   if(!levels[guildId][userId]) levels[guildId][userId] = { xp:0, level:1 };
   const userData = levels[guildId][userId];
@@ -129,121 +188,177 @@ function addXP(guildId, userId, amount){
     userData.level++;
     userData.xp -= xpNeeded;
     saveData();
-    return true; // leveled up
+    return true;
   }
   saveData();
   return false;
 }
 
-function xpOnCooldown(userId){
+function xpOnCooldown(userId) {
   const now = Date.now();
   const last = xpCooldowns.get(userId) || 0;
-  if(now - last < 60000) return true; // 60s cooldown
+  if(now - last < 60000) return true;
   xpCooldowns.set(userId, now);
   return false;
 }
+
 // ---------- WELCOME EVENT ----------
 client.on("guildMemberAdd", async member => {
   const guildId = member.guild.id;
-
-  // Auto-role
   if(autoRoles[guildId]){
     const role = member.guild.roles.cache.get(autoRoles[guildId]);
     if(role) member.roles.add(role).catch(console.error);
   }
-
-  // Welcome message
   if(!welcomeChannels[guildId]) return;
   const channel = member.guild.channels.cache.get(welcomeChannels[guildId]);
   if(!channel) return;
-
   const memberCount = member.guild.memberCount;
-
   const welcomeEmbed = new EmbedBuilder()
     .setColor("Gold")
     .setTitle(`🎉 WELCOME ${member.user.username}! 🎉`)
     .setDescription(
-      `✨ ───────────────── ✨
-
-` +
-      `🔥 You joined **${member.guild.name}**
-` +
-      `💎 Enjoy your stay & have fun!
-
-` +
-      `🚀 Start chatting now
-` +
-      `📜 Read the rules
-` +
-      `🎯 Get your roles
-
-` +
-      `👥 Member #${memberCount}
-
-` +
-      `✨ ───────────────── ✨
-
-` +
+      `✨ ───────────────── ✨\n` +
+      `🔥 You joined **${member.guild.name}**\n` +
+      `💎 Enjoy your stay & have fun!\n\n` +
+      `🚀 Start chatting now\n` +
+      `📜 Read the rules\n` +
+      `🎯 Get your roles\n\n` +
+      `👥 Member #${memberCount}\n\n` +
+      `✨ ───────────────── ✨\n\n` +
       `💥 We're glad to have you here! 💥`
     )
     .setThumbnail(member.user.displayAvatarURL({ dynamic: true, size: 256 }))
     .setFooter({ text: `Member #${memberCount} • ${new Date(member.joinedTimestamp).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' })}, ${new Date(member.joinedTimestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` })
     .setTimestamp(member.joinedAt);
-
   channel.send({ embeds: [welcomeEmbed] });
 });
 
-// ---------- MESSAGE COMMANDS (prefix: ?) ----------
+// ---------- MESSAGE EVENT (XP + AFK + prefix + AUTO-MOD) ----------
 client.on("messageCreate", async message => {
   if(message.author.bot) return;
+  if(!message.guild) return;
 
-  // AFK check — mention handling
+  const guildId = message.guild.id;
+  const userId  = message.author.id;
+  const cfg     = getAutomod(guildId);
+
+  // ---- AUTO-MOD CHECKS ----
+  if(cfg.enabled && !message.member?.permissions.has(PermissionsBitField.Flags.ManageMessages)){
+
+    // 1) Blocked words
+    const lowerContent = message.content.toLowerCase();
+    const foundWord = cfg.blockedWords.find(w => lowerContent.includes(w.toLowerCase()));
+    if(foundWord){
+      await message.delete().catch(() => {});
+      // Issue auto-warning
+      if(!warnings[guildId]) warnings[guildId] = {};
+      if(!warnings[guildId][userId]) warnings[guildId][userId] = [];
+      warnings[guildId][userId].push({ reason: `[AutoMod] Blocked word: "${foundWord}"`, date: new Date().toISOString() });
+      saveData();
+      const warnEmbed = new EmbedBuilder()
+        .setColor("Red")
+        .setTitle("🚫 AutoMod — Blocked Word")
+        .addFields(
+          { name: "User", value: `${message.author} (${message.author.tag})`, inline: true },
+          { name: "Channel", value: `${message.channel}`, inline: true },
+          { name: "Trigger", value: `\`${foundWord}\``, inline: true },
+          { name: "Message", value: message.content.slice(0, 200) || "—" }
+        )
+        .setTimestamp();
+      await sendAutomodLog(message.guild, warnEmbed, cfg);
+      message.channel.send(`⚠️ ${message.author}, your message was removed — it contained a blocked word.`)
+        .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+      return;
+    }
+
+    // 2) Spam detection
+    const msgCount = trackSpam(guildId, userId);
+    if(msgCount >= cfg.spamLimit){
+      // Delete recent messages from this user
+      const fetched = await message.channel.messages.fetch({ limit: 20 }).catch(() => null);
+      if(fetched){
+        const userMsgs = fetched.filter(m => m.author.id === userId);
+        message.channel.bulkDelete(userMsgs, true).catch(() => {});
+      }
+      // Mute for 2 minutes
+      try {
+        await message.member.timeout(2 * 60 * 1000, "AutoMod: spam detected");
+      } catch {}
+      // Reset tracker
+      spamTracker.set(`${guildId}:${userId}`, []);
+      const spamEmbed = new EmbedBuilder()
+        .setColor("Orange")
+        .setTitle("⚡ AutoMod — Spam Detected")
+        .addFields(
+          { name: "User", value: `${message.author} (${message.author.tag})`, inline: true },
+          { name: "Channel", value: `${message.channel}`, inline: true },
+          { name: "Action", value: "Muted for 2 minutes, recent messages deleted", inline: false }
+        )
+        .setTimestamp();
+      await sendAutomodLog(message.guild, spamEmbed, cfg);
+      message.channel.send(`⚠️ ${message.author}, you were muted for 2 minutes due to spam.`)
+        .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+      return;
+    }
+
+    // 3) Discord invite links
+    if(cfg.blockLinks && /discord\.gg\/|discord\.com\/invite\//i.test(message.content)){
+      await message.delete().catch(() => {});
+      if(!warnings[guildId]) warnings[guildId] = {};
+      if(!warnings[guildId][userId]) warnings[guildId][userId] = [];
+      warnings[guildId][userId].push({ reason: "[AutoMod] Discord invite link", date: new Date().toISOString() });
+      saveData();
+      const linkEmbed = new EmbedBuilder()
+        .setColor("Red")
+        .setTitle("🔗 AutoMod — Invite Link Blocked")
+        .addFields(
+          { name: "User", value: `${message.author} (${message.author.tag})`, inline: true },
+          { name: "Channel", value: `${message.channel}`, inline: true }
+        )
+        .setTimestamp();
+      await sendAutomodLog(message.guild, linkEmbed, cfg);
+      message.channel.send(`⚠️ ${message.author}, posting Discord invite links is not allowed here.`)
+        .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+      return;
+    }
+  }
+
+  // ---- AFK CHECK ----
   if(message.mentions.users.size > 0){
     message.mentions.users.forEach(user => {
-      if(afkData[user.id]){
-        message.reply(`💤 **${user.tag}** is AFK: ${afkData[user.id]}`);
-      }
+      if(afkData[user.id]) message.reply(`💤 **${user.tag}** is AFK: ${afkData[user.id]}`);
     });
   }
-  // Remove AFK when user sends a message
-  if(afkData[message.author.id]){
-    delete afkData[message.author.id];
+  if(afkData[userId]){
+    delete afkData[userId];
     saveData();
     message.reply("✅ Welcome back! Your AFK has been removed.").then(m => setTimeout(() => m.delete(), 5000));
   }
 
-  // XP gain — works in all channels
-  const guildId = message.guild?.id;
-  const userId = message.author.id;
+  // ---- XP GAIN ----
   if(guildId && !xpOnCooldown(userId)){
     const xpGain = Math.floor(Math.random() * 10) + 5;
     const leveledUp = addXP(guildId, userId, xpGain);
     if(leveledUp){
       const lvl = levels[guildId][userId].level;
-      const levelUpMsg = new (require('discord.js').EmbedBuilder)()
+      const levelUpMsg = new EmbedBuilder()
         .setColor("Gold")
         .setTitle("🎁 Level Up!")
-        .setDescription(`🎉 ${message.author} just leveled up to **Level ${lvl}**!
-📈 Keep chatting to reach the next level!`)
+        .setDescription(`🎉 ${message.author} just leveled up to **Level ${lvl}**!\n📈 Keep chatting to reach the next level!`)
         .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
         .setTimestamp();
-      // Send to xpChannel if set, otherwise reply in current channel
       const notifyChannelId = xpChannels[guildId];
-      const notifyChannel = notifyChannelId
-        ? message.guild.channels.cache.get(notifyChannelId)
-        : message.channel;
+      const notifyChannel = notifyChannelId ? message.guild.channels.cache.get(notifyChannelId) : message.channel;
       if(notifyChannel) notifyChannel.send({ embeds: [levelUpMsg] });
     }
   }
 
-  // ---------- ?rules COMMAND ----------
+  // ---- ?rules COMMAND ----
   if(message.content.toLowerCase() === "?rules"){
     const rulesEmbed = new EmbedBuilder()
       .setColor("Blue")
       .setTitle("📜 Discord Server Rules")
-      .setDescription(
-        "Follow the rules to keep the server safe and fun for everyone!"
-      )
+      .setDescription("Follow the rules to keep the server safe and fun for everyone!")
       .addFields(
         { name: "1. Respect Everyone", value: "No harassment, bullying, hate speech, or discrimination." },
         { name: "2. No Spamming", value: "Avoid spam, excessive links, or self-promotion." },
@@ -255,16 +370,76 @@ client.on("messageCreate", async message => {
         { name: "9. Have Fun! 🎉", value: "Enjoy yourself and help create a friendly community!" }
       )
       .setFooter({ text: "Follow the rules to keep the server safe and fun!" });
-
     return message.channel.send({ embeds: [rulesEmbed] });
   }
 });
 
 // ---------- INTERACTIONS ----------
-client.on("interactionCreate", async interaction=>{
+client.on("interactionCreate", async interaction => {
   if(!interaction.isCommand()) return;
   const { commandName, guild, member } = interaction;
   const isAdmin = member.permissions.has(PermissionsBitField.Flags.Administrator);
+
+  // ---------- AUTOMOD ----------
+  if(commandName === "automod"){
+    if(!isAdmin) return interaction.reply({ content:"❌ Admins only.", ephemeral:true });
+    const sub = interaction.options.getSubcommand();
+    const cfg = getAutomod(guild.id);
+
+    if(sub === "enable"){
+      cfg.enabled = true; saveAutomod();
+      return interaction.reply("✅ Auto-mod **enabled**.");
+    }
+    if(sub === "disable"){
+      cfg.enabled = false; saveAutomod();
+      return interaction.reply("✅ Auto-mod **disabled**.");
+    }
+    if(sub === "addword"){
+      const word = interaction.options.getString("word").toLowerCase();
+      if(cfg.blockedWords.includes(word)) return interaction.reply("⚠️ That word is already blocked.");
+      cfg.blockedWords.push(word); saveAutomod();
+      return interaction.reply(`✅ Added \`${word}\` to the blocked words list.`);
+    }
+    if(sub === "removeword"){
+      const word = interaction.options.getString("word").toLowerCase();
+      const idx = cfg.blockedWords.indexOf(word);
+      if(idx === -1) return interaction.reply("⚠️ That word isn't in the list.");
+      cfg.blockedWords.splice(idx, 1); saveAutomod();
+      return interaction.reply(`✅ Removed \`${word}\` from the blocked words list.`);
+    }
+    if(sub === "listwords"){
+      if(cfg.blockedWords.length === 0) return interaction.reply("📋 No blocked words set.");
+      return interaction.reply({ content:`📋 **Blocked words:**\n${cfg.blockedWords.map(w=>`\`${w}\``).join(", ")}`, ephemeral:true });
+    }
+    if(sub === "setlog"){
+      const channel = interaction.options.getChannel("channel");
+      cfg.logChannel = channel.id; saveAutomod();
+      return interaction.reply(`✅ Auto-mod logs will be sent to ${channel}.`);
+    }
+    if(sub === "setspam"){
+      const limit = interaction.options.getInteger("limit");
+      cfg.spamLimit = limit; saveAutomod();
+      return interaction.reply(`✅ Spam limit set to **${limit}** messages per 5 seconds.`);
+    }
+    if(sub === "setlinks"){
+      const enabled = interaction.options.getBoolean("enabled");
+      cfg.blockLinks = enabled; saveAutomod();
+      return interaction.reply(`✅ Discord invite link blocking is now **${enabled ? "enabled" : "disabled"}**.`);
+    }
+    if(sub === "status"){
+      const embed = new EmbedBuilder()
+        .setTitle("🛡️ Auto-Mod Settings")
+        .setColor(cfg.enabled ? "Green" : "Red")
+        .addFields(
+          { name: "Status",        value: cfg.enabled ? "✅ Enabled" : "❌ Disabled", inline: true },
+          { name: "Log Channel",   value: cfg.logChannel ? `<#${cfg.logChannel}>` : "Not set", inline: true },
+          { name: "Spam Limit",    value: `${cfg.spamLimit} msgs / 5s`, inline: true },
+          { name: "Block Invites", value: cfg.blockLinks ? "Yes" : "No", inline: true },
+          { name: "Blocked Words", value: cfg.blockedWords.length > 0 ? cfg.blockedWords.map(w=>`\`${w}\``).join(", ") : "None", inline: false }
+        );
+      return interaction.reply({ embeds:[embed], ephemeral:true });
+    }
+  }
 
   // ---------- CLEAR ----------
   if(commandName === "clear"){
@@ -287,10 +462,11 @@ client.on("interactionCreate", async interaction=>{
       .setColor("Blue")
       .setDescription("All commands")
       .addFields(
-        { name:"Moderation", value:"`/clear`, `/kick`, `/ban`, `/mute`, `/unmute`, `/warn`, `/warnings`, `/announce`" },
+        { name:"Moderation",  value:"`/clear`, `/kick`, `/ban`, `/mute`, `/unmute`, `/warn`, `/warnings`, `/announce`" },
         { name:"Levels & XP", value:"`/level`, `/addxp`, `/removexp`, `/leaderboard`, `/setxpchannel`" },
-        { name:"Economy", value:"`/cash`, `/daily`, `/give`, `/fish`, `/rob`, `/gamble`, `/shop`, `/buy`" },
-        { name:"Utility", value:"`/afk`, `?rules`" }
+        { name:"Economy",     value:"`/cash`, `/daily`, `/give`, `/fish`, `/rob`, `/gamble`, `/shop`, `/buy`" },
+        { name:"Auto-Mod",    value:"`/automod enable/disable/addword/removeword/listwords/setlog/setspam/setlinks/status`" },
+        { name:"Utility",     value:"`/afk`, `?rules`" }
       );
     return interaction.reply({ embeds:[embed] });
   }
@@ -345,8 +521,7 @@ client.on("interactionCreate", async interaction=>{
     const channel = interaction.options.getChannel("channel");
     xpChannels[guild.id] = channel.id;
     saveData();
-    return interaction.reply(`✅ Level-up notifications will now be sent to ${channel}.
-📢 XP is still earned in **all channels** — only the notification goes there.`);
+    return interaction.reply(`✅ Level-up notifications will now be sent to ${channel}.\n📢 XP is still earned in **all channels** — only the notification goes there.`);
   }
 
   // ---------- ADDXP ----------
@@ -372,12 +547,8 @@ client.on("interactionCreate", async interaction=>{
     if(!levels[guild.id][target.id]) levels[guild.id][target.id] = { xp:0, level:1 };
     const userData = levels[guild.id][target.id];
     userData.xp -= amount;
-    // Handle XP going negative — drop a level if needed
-    while(userData.xp < 0 && userData.level > 1){
-      userData.level--;
-      userData.xp += userData.level * 100;
-    }
-    if(userData.xp < 0) userData.xp = 0; // Can't go below level 1 with 0 XP
+    while(userData.xp < 0 && userData.level > 1){ userData.level--; userData.xp += userData.level * 100; }
+    if(userData.xp < 0) userData.xp = 0;
     saveData();
     return interaction.reply(`✅ Removed **${amount} XP** from ${target.tag}.\nThey are now **Level ${userData.level}** with **${userData.xp}/${userData.level*100} XP**.`);
   }
@@ -386,28 +557,19 @@ client.on("interactionCreate", async interaction=>{
   if(commandName === "leaderboard"){
     if(!levels[guild.id] || Object.keys(levels[guild.id]).length === 0)
       return interaction.reply("❌ No XP data for this server yet.");
-
-    // Sort by level desc, then XP desc
     const sorted = Object.entries(levels[guild.id])
       .sort(([,a],[,b]) => b.level !== a.level ? b.level - a.level : b.xp - a.xp)
       .slice(0, 10);
-
     const medals = ['🥇','🥈','🥉'];
     let desc = '';
     for(let i = 0; i < sorted.length; i++){
       const [userId, data] = sorted[i];
       let tag;
-      try { const u = await client.users.fetch(userId); tag = u.tag; }
-      catch { tag = `Unknown User`; }
+      try { const u = await client.users.fetch(userId); tag = u.tag; } catch { tag = `Unknown User`; }
       const rank = medals[i] || `**#${i+1}**`;
       desc += `${rank} ${tag} — Level **${data.level}** (${data.xp}/${data.level*100} XP)\n`;
     }
-
-    const embed = new EmbedBuilder()
-      .setTitle(`🏆 ${guild.name} XP Leaderboard`)
-      .setColor("Gold")
-      .setDescription(desc)
-      .setTimestamp();
+    const embed = new EmbedBuilder().setTitle(`🏆 ${guild.name} XP Leaderboard`).setColor("Gold").setDescription(desc).setTimestamp();
     return interaction.reply({ embeds:[embed] });
   }
 
@@ -415,14 +577,11 @@ client.on("interactionCreate", async interaction=>{
   ensureUser(interaction.user.id);
   if(["cash","daily","give","fish","rob","gamble","shop","buy"].includes(commandName)){
 
-    // --- CASH ---
     if(commandName==="cash"){
       const target = interaction.options.getUser("user")||interaction.user;
       ensureUser(target.id);
       return interaction.reply(`💰 ${target.tag} has $${economy[target.id].cash}`);
     }
-
-    // --- DAILY ---
     if(commandName==="daily"){
       const now = Date.now();
       const last = economy[interaction.user.id].lastDaily;
@@ -438,8 +597,6 @@ client.on("interactionCreate", async interaction=>{
       saveEconomy();
       return interaction.reply(`✅ You claimed daily reward of $${reward}`);
     }
-
-    // --- GIVE ---
     if(commandName==="give"){
       const target = interaction.options.getUser("user");
       const amount = interaction.options.getInteger("amount");
@@ -451,16 +608,12 @@ client.on("interactionCreate", async interaction=>{
       saveEconomy();
       return interaction.reply(`💸 Gave $${amount} to ${target.tag}`);
     }
-
-    // --- FISH ---
     if(commandName==="fish"){
       const gain = Math.floor(Math.random()*300)+50;
       economy[interaction.user.id].cash+=gain;
       saveEconomy();
       return interaction.reply(`🎣 You caught $${gain}`);
     }
-
-    // --- ROB ---
     if(commandName==="rob"){
       const target = interaction.options.getUser("user");
       ensureUser(target.id);
@@ -479,8 +632,6 @@ client.on("interactionCreate", async interaction=>{
         return interaction.reply(`❌ Failed! Lost $${lost}`);
       }
     }
-
-    // --- GAMBLE ---
     if(commandName==="gamble"){
       const amount = interaction.options.getInteger("amount");
       if(amount<=0) return interaction.reply("❌ Must be >0");
@@ -489,21 +640,12 @@ client.on("interactionCreate", async interaction=>{
       if(win){ economy[interaction.user.id].cash+=amount; saveEconomy(); return interaction.reply(`🎉 Won $${amount}`);}
       else{ economy[interaction.user.id].cash-=amount; saveEconomy(); return interaction.reply(`💸 Lost $${amount}`);}
     }
-
-    // --- SHOP ---
     if(commandName==="shop"){
-      if(Object.keys(shop).length===0){
-        shop["VIP Role"]={ price:1000, desc:"Buy a VIP role" };
-        saveShop();
-      }
+      if(Object.keys(shop).length===0){ shop["VIP Role"]={ price:1000, desc:"Buy a VIP role" }; saveShop(); }
       let desc="";
-      for(const item in shop){
-        desc+=`**${item}** - $${shop[item].price}\n${shop[item].desc}\n\n`;
-      }
+      for(const item in shop) desc+=`**${item}** - $${shop[item].price}\n${shop[item].desc}\n\n`;
       return interaction.reply({ embeds:[new EmbedBuilder().setTitle("🛒 Shop").setColor("Green").setDescription(desc)] });
     }
-
-    // --- BUY ---
     if(commandName==="buy"){
       const item = interaction.options.getString("item");
       if(!shop[item]) return interaction.reply("❌ Item not found");
