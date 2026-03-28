@@ -698,7 +698,12 @@ client.on("interactionCreate", async interaction => {
   // ─────────────────────────────────────────────
 
   if (commandName === "help") {
-    const embed = new EmbedBuilder().setTitle("🤖 Bot Commands").setColor("Blue")
+    const cfg = getAutomod(guild.id);
+    const automodBadge = cfg.enabled ? "🛡️ `Uses AutoMod`" : "";
+    const embed = new EmbedBuilder()
+      .setTitle("🤖 Bot Commands")
+      .setColor("Blue")
+      .setDescription(automodBadge || null)
       .addFields(
         { name: "⚔️ Moderation",  value: "`/kick`, `/ban`, `/warn`, `/warnings`, `/clearwarnings`, `/mute`, `/unmute`, `/clear`, `/announce`" },
         { name: "📈 Levels & XP", value: "`/level`, `/addxp`, `/removexp`, `/leaderboard`, `/setxpchannel`" },
@@ -706,7 +711,8 @@ client.on("interactionCreate", async interaction => {
         { name: "🛡️ Auto-Mod",   value: "`/automod enable/disable/addword/removeword/listwords/setlog/setspam/setlinks/status`" },
         { name: "⚙️ Setup",       value: "`/setwelcome`, `/setautorole`, `/setxpchannel`" },
         { name: "🔧 Utility",     value: "`/afk`, `/ping`, `?rules`, `?lock [reason]`, `?unlock`" }
-      );
+      )
+      .setFooter({ text: cfg.enabled ? "🛡️ AutoMod is active on this server" : "💡 Tip: Enable AutoMod with /automod enable" });
     return interaction.reply({ embeds: [embed] });
   }
 
