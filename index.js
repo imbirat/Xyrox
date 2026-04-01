@@ -78,13 +78,11 @@ const getAMConfig  = guildId => { if (!automodConfig[guildId]) automodConfig[gui
 // ─────────────────────────────────────────────────────────────
 // ANTI-NUKE SYSTEM
 // ─────────────────────────────────────────────────────────────
-
-// Default thresholds (actions within timeWindow ms trigger punishment)
 const AN_DEFAULTS = {
   enabled: false,
   logChannel: null,
-  punishment: 'ban',         // 'ban' | 'kick' | 'strip' (strip all roles)
-  whitelist: [],             // user IDs exempt from anti-nuke
+  punishment: 'ban',
+  whitelist: [],
   thresholds: {
     ban:           { limit: 3,  window: 10000 },
     kick:          { limit: 3,  window: 10000 },
@@ -97,7 +95,6 @@ const AN_DEFAULTS = {
 
 function getAN(guildId) {
   if (!antinukeConfig[guildId]) antinukeConfig[guildId] = JSON.parse(JSON.stringify(AN_DEFAULTS));
-  // Ensure all keys exist (for older saved configs)
   const cfg = antinukeConfig[guildId];
   if (!cfg.thresholds) cfg.thresholds = JSON.parse(JSON.stringify(AN_DEFAULTS.thresholds));
   if (cfg.whitelist === undefined) cfg.whitelist = [];
@@ -105,7 +102,6 @@ function getAN(guildId) {
   return cfg;
 }
 
-// In-memory action tracker: Map<guildId, Map<userId, Map<action, timestamp[]>>>
 const nukeTracker = new Map();
 
 function trackAction(guildId, userId, action) {
@@ -119,7 +115,6 @@ function trackAction(guildId, userId, action) {
   timestamps.push(now);
   const cfg = getAN(guildId);
   const thr = cfg.thresholds[action];
-  // Clean up old entries outside window
   const fresh = timestamps.filter(t => now - t < (thr?.window || 10000));
   user.set(action, fresh);
   return fresh.length;
@@ -129,8 +124,6 @@ async function punishNuker(guild, userId, action, count) {
   const cfg = getAN(guild.id);
   const member = await guild.members.fetch(userId).catch(() => null);
   if (!member) return;
-
-  // Never punish the bot itself or the server owner
   if (userId === client.user.id) return;
   if (userId === guild.ownerId) return;
 
@@ -142,9 +135,6 @@ async function punishNuker(guild, userId, action, count) {
     roleDelete: 'Mass Role Delete',
     webhookCreate: 'Mass Webhook Create',
   }[action] || action;
-
-  // Strip all dangerous permissions / roles first
-  const safeRoles = member.roles.cache.filter(r => r.id !== guild.id).map(r => r.id);
 
   try {
     switch (cfg.punishment) {
@@ -163,7 +153,6 @@ async function punishNuker(guild, userId, action, count) {
     console.error('[Anti-Nuke] Failed to punish:', e.message);
   }
 
-  // Log to channel if set
   if (cfg.logChannel) {
     const logCh = guild.channels.cache.get(cfg.logChannel);
     if (logCh) {
@@ -192,33 +181,27 @@ async function handleAntiNuke(guild, userId, action) {
   if (userId === guild.ownerId) return;
   if (userId === client.user.id) return;
 
-  // Check if executor is an admin — whitelist all admins optionally (no, we still watch admins; only explicit whitelist skips)
   const count = trackAction(guild.id, userId, action);
   const thr = cfg.thresholds[action];
   if (!thr) return;
   if (count >= thr.limit) {
-    // Reset tracker so we don't fire multiple times for same burst
     const tracker = nukeTracker.get(guild.id)?.get(userId);
     if (tracker) tracker.set(action, []);
     await punishNuker(guild, userId, action, count);
   }
 }
 
-// Audit log helper — fetches the latest entry of a given type
 async function getAuditExecutor(guild, type) {
   try {
     const logs = await guild.fetchAuditLogs({ limit: 1, type });
     const entry = logs.entries.first();
     if (!entry) return null;
-    // Only return if it happened in the last 5 seconds
     if (Date.now() - entry.createdTimestamp > 5000) return null;
     return entry.executor?.id || null;
   } catch {
     return null;
   }
 }
-
-// ── Anti-Nuke Event Listeners ──
 
 client.on('guildBanAdd', async ban => {
   const executor = await getAuditExecutor(ban.guild, AuditLogEvent.MemberBanAdd);
@@ -482,12 +465,11 @@ const commands = [
   new SlashCommandBuilder().setName('clear').setDescription('Delete messages')
     .addIntegerOption(o => o.setName('amount').setDescription('1-100').setRequired(true).setMinValue(1).setMaxValue(100)),
 
-  // ── ANNOUNCE (FIXED) ──
-  // Channel is selected via slash option; message text is entered in a modal.
-  // The modal now also has a "mention" field so users can @mention roles/users.
+  // ── ANNOUNCE ──
   new SlashCommandBuilder().setName('announce').setDescription('Send an announcement')
     .addChannelOption(o => o.setName('channel').setDescription('Channel to send the announcement in').setRequired(true))
-    .addBooleanOption(o => o.setName('ping_everyone').setDescription('Ping @everyone with the announcement? (default: false)')),
+    .addBooleanOption(o => o.setName('ping_everyone').setDescription('Ping @everyone with the announcement? (default: false)'))
+    .addRoleOption(o => o.setName('ping_role').setDescription('Optional: also ping a specific role')),
 
   new SlashCommandBuilder().setName('kick').setDescription('Kick a member')
     .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
@@ -634,7 +616,6 @@ client.once('ready', () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   client.user.setPresence({ status: 'idle', activities: [{ name: '/help | Xyrox', type: 0 }] });
 
-  // Bank interest — 2% every hour, credited silently
   setInterval(() => {
     let changed = false;
     for (const id of Object.keys(economy)) {
@@ -861,22 +842,28 @@ client.on('interactionCreate', async interaction => {
 
     // ── Announce modal ──
     if (interaction.customId.startsWith('announce_modal_')) {
-      // Format: announce_modal_{channelId}_{pingEveryone}
-      const parts       = interaction.customId.replace('announce_modal_', '').split('_');
-      const pingEveryone = parts.pop() === 'true';
-      const channelId   = parts.join('_'); // re-join in case channel IDs had underscores (they don't, but safe)
+      // customId format: announce_modal_{channelId}_{pingEveryone}_{roleId|none}
+      const raw = interaction.customId.replace('announce_modal_', '');
 
-      const messageText  = interaction.fields.getTextInputValue('announce_message');
-      const mentionText  = interaction.fields.getTextInputValue('announce_mention').trim();
+      // Parse from right so channel snowflake (no underscores) is safe
+      const lastUnderscore2 = raw.lastIndexOf('_');
+      const roleId = raw.slice(lastUnderscore2 + 1); // 'none' or actual role ID
+      const withoutRole = raw.slice(0, lastUnderscore2);
+
+      const lastUnderscore1 = withoutRole.lastIndexOf('_');
+      const pingEveryone = withoutRole.slice(lastUnderscore1 + 1) === 'true';
+      const channelId = withoutRole.slice(0, lastUnderscore1);
+
+      const messageText = interaction.fields.getTextInputValue('announce_message');
       const targetChannel = interaction.guild.channels.cache.get(channelId);
 
       if (!targetChannel) return interaction.reply({ content: '❌ Channel not found.', ephemeral: true });
 
-      // Build content string: optional ping + optional custom mention
-      let content = '';
-      if (pingEveryone) content += '@everyone ';
-      if (mentionText)  content += mentionText + ' ';
-      content = content.trim();
+      // Pings MUST be in content string (not embed) to actually notify people
+      const contentParts = [];
+      if (pingEveryone) contentParts.push('@everyone');
+      if (roleId !== 'none') contentParts.push(`<@&${roleId}>`);
+      const content = contentParts.join(' ') || undefined;
 
       const embed = new EmbedBuilder()
         .setColor('Blue')
@@ -884,7 +871,11 @@ client.on('interactionCreate', async interaction => {
         .setFooter({ text: `Announced by ${interaction.user.tag}` })
         .setTimestamp();
 
-      await targetChannel.send({ content: content || undefined, embeds: [embed], allowedMentions: { parse: ['everyone', 'roles', 'users'] } });
+      await targetChannel.send({
+        content,
+        embeds: [embed],
+        allowedMentions: { parse: ['everyone', 'roles', 'users'] },
+      });
       return interaction.reply({ content: `✅ Announcement sent in ${targetChannel}.`, ephemeral: true });
     }
 
@@ -903,7 +894,6 @@ client.on('interactionCreate', async interaction => {
   // ANTI-NUKE COMMANDS
   // ════════════════════════════════════════════
   if (commandName === 'antinuke') {
-    // Only the server owner can configure anti-nuke
     if (interaction.user.id !== guild.ownerId) {
       return interaction.reply({ content: '❌ Only the **server owner** can configure Anti-Nuke.', ephemeral: true });
     }
@@ -943,10 +933,10 @@ client.on('interactionCreate', async interaction => {
         .setTitle('🛡️ Anti-Nuke Status')
         .setDescription(cfg.enabled ? '✅ **Enabled** — Server is protected' : '❌ **Disabled** — Server is unprotected')
         .addFields(
-          { name: '🔨 Punishment',      value: cfg.punishment.toUpperCase(),                                            inline: true },
-          { name: '📋 Log Channel',     value: cfg.logChannel ? `<#${cfg.logChannel}>` : 'Not set',                   inline: true },
-          { name: '🔓 Whitelist',       value: wl,                                                                      inline: false },
-          { name: '📊 Thresholds',      value:
+          { name: '🔨 Punishment',  value: cfg.punishment.toUpperCase(),                              inline: true },
+          { name: '📋 Log Channel', value: cfg.logChannel ? `<#${cfg.logChannel}>` : 'Not set',      inline: true },
+          { name: '🔓 Whitelist',   value: wl,                                                        inline: false },
+          { name: '📊 Thresholds',  value:
             `**Ban:** ${thr.ban.limit} in ${thr.ban.window / 1000}s\n` +
             `**Kick:** ${thr.kick.limit} in ${thr.kick.window / 1000}s\n` +
             `**Channel Delete:** ${thr.channelDelete.limit} in ${thr.channelDelete.window / 1000}s\n` +
@@ -1241,14 +1231,17 @@ client.on('interactionCreate', async interaction => {
       .setFooter({ text: `ID: ${targetUser.id}` }).setTimestamp()] });
   }
 
-  // ── ANNOUNCE (FIXED) ──
+  // ── ANNOUNCE ──
   if (commandName === 'announce') {
     if (!isMod) return interaction.reply({ content: '❌ You need **Manage Messages** permission.', ephemeral: true });
+
     const targetChannel = interaction.options.getChannel('channel');
     const pingEveryone  = interaction.options.getBoolean('ping_everyone') ?? false;
+    const pingRole      = interaction.options.getRole('ping_role');
+    const roleId        = pingRole ? pingRole.id : 'none';
 
     const modal = new ModalBuilder()
-      .setCustomId(`announce_modal_${targetChannel.id}_${pingEveryone}`)
+      .setCustomId(`announce_modal_${targetChannel.id}_${pingEveryone}_${roleId}`)
       .setTitle('Send Announcement');
 
     const msgInput = new TextInputBuilder()
@@ -1259,19 +1252,7 @@ client.on('interactionCreate', async interaction => {
       .setRequired(true)
       .setMaxLength(4000);
 
-    // New: optional mention field — user types @Role or @User name/ID here
-    const mentionInput = new TextInputBuilder()
-      .setCustomId('announce_mention')
-      .setLabel('Ping (optional) — e.g. <@&ROLE_ID> or <@USER_ID>')
-      .setStyle(TextInputStyle.Short)
-      .setPlaceholder('Leave blank for no extra ping')
-      .setRequired(false)
-      .setMaxLength(200);
-
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(msgInput),
-      new ActionRowBuilder().addComponents(mentionInput),
-    );
+    modal.addComponents(new ActionRowBuilder().addComponents(msgInput));
     return interaction.showModal(modal);
   }
 
@@ -1333,12 +1314,12 @@ client.on('interactionCreate', async interaction => {
       .setAuthor({ name: guild.name, iconURL: guild.iconURL({ dynamic: true }) || undefined })
       .setThumbnail(guild.iconURL({ dynamic: true, size: 256 }))
       .addFields(
-        { name: '👑 Owner',        value: `${owner}`,                                                                    inline: true },
-        { name: '🆔 Server ID',    value: `\`${guild.id}\``,                                                            inline: true },
-        { name: '📅 Created',      value: created,                                                                       inline: true },
-        { name: '👥 Members',      value: `👤 Humans: **${humans}**\n🤖 Bots: **${bots}**\n🟢 Online: **${online}**\n📊 Total: **${total}**`, inline: true },
-        { name: '💬 Channels',     value: `💬 Text: **${textCh}**\n🔊 Voice: **${voiceCh}**\n📁 Categories: **${categories}**`,               inline: true },
-        { name: '✨ Server Info',  value: `🏷️ Roles: **${roles}**\n😀 Emojis: **${emojis}**\n🚀 Boosts: **${boosts}** (${boostTier})\n🔒 Verification: **${verif}**`, inline: true },
+        { name: '👑 Owner',       value: `${owner}`,                                                                    inline: true },
+        { name: '🆔 Server ID',   value: `\`${guild.id}\``,                                                            inline: true },
+        { name: '📅 Created',     value: created,                                                                       inline: true },
+        { name: '👥 Members',     value: `👤 Humans: **${humans}**\n🤖 Bots: **${bots}**\n🟢 Online: **${online}**\n📊 Total: **${total}**`, inline: true },
+        { name: '💬 Channels',    value: `💬 Text: **${textCh}**\n🔊 Voice: **${voiceCh}**\n📁 Categories: **${categories}**`,               inline: true },
+        { name: '✨ Server Info', value: `🏷️ Roles: **${roles}**\n😀 Emojis: **${emojis}**\n🚀 Boosts: **${boosts}** (${boostTier})\n🔒 Verification: **${verif}**`, inline: true },
       )
       .setFooter({ text: `${total} total members`, iconURL: guild.iconURL({ dynamic: true }) || undefined })
       .setTimestamp();
