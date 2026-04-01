@@ -3,7 +3,7 @@ const {
   PermissionsBitField, EmbedBuilder, ActionRowBuilder, ButtonBuilder,
   ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder,
   TextInputStyle, AutoModerationRuleEventType, AutoModerationRuleTriggerType,
-  AutoModerationActionType
+  AutoModerationActionType, AuditLogEvent
 } = require('discord.js');
 const express = require('express');
 const fs = require('fs');
@@ -24,6 +24,7 @@ const client = new Client({
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildModeration,
   ],
 });
 
@@ -35,15 +36,16 @@ const BOT_TAG   = '[XyroxBot]';
 // DATA FILES
 // ─────────────────────────────────────────────────────────────
 const FILES = {
-  levels:   './levels.json',
-  warnings: './warnings.json',
-  xpCh:     './xpChannels.json',
-  afk:      './afk.json',
-  roles:    './autoroles.json',
-  welcome:  './welcome.json',
-  economy:  './economy.json',
-  shop:     './shop.json',
-  automod:  './automod_config.json',
+  levels:    './levels.json',
+  warnings:  './warnings.json',
+  xpCh:      './xpChannels.json',
+  afk:       './afk.json',
+  roles:     './autoroles.json',
+  welcome:   './welcome.json',
+  economy:   './economy.json',
+  shop:      './shop.json',
+  automod:   './automod_config.json',
+  antinuke:  './antinuke.json',
 };
 
 const load = f => fs.existsSync(f) ? JSON.parse(fs.readFileSync(f)) : {};
@@ -57,12 +59,15 @@ let welcomeChannels = load(FILES.welcome);
 let economy         = load(FILES.economy);
 let shop            = load(FILES.shop);
 let automodConfig   = load(FILES.automod);
+let antinukeConfig  = load(FILES.antinuke);
 
-const save = (file, data) => fs.writeFileSync(file, JSON.stringify(data, null, 2));
+const save         = (file, data) => fs.writeFileSync(file, JSON.stringify(data, null, 2));
 const saveData     = () => { save(FILES.levels, levels); save(FILES.warnings, warnings); save(FILES.xpCh, xpChannels); save(FILES.afk, afkData); save(FILES.roles, autoRoles); save(FILES.welcome, welcomeChannels); };
 const saveEconomy  = () => save(FILES.economy, economy);
 const saveShop     = () => save(FILES.shop, shop);
 const saveAutomod  = () => save(FILES.automod, automodConfig);
+const saveAntinuke = () => save(FILES.antinuke, antinukeConfig);
+
 const ensureUser = id => {
   if (!economy[id]) economy[id] = { cash: 0, bank: 0, lastDaily: 0, lastInterest: 0, inventory: [] };
   if (economy[id].bank === undefined) economy[id].bank = 0;
@@ -71,10 +76,185 @@ const ensureUser = id => {
 const getAMConfig  = guildId => { if (!automodConfig[guildId]) automodConfig[guildId] = { logChannel: null, exemptRoles: [], exemptChannels: [] }; return automodConfig[guildId]; };
 
 // ─────────────────────────────────────────────────────────────
+// ANTI-NUKE SYSTEM
+// ─────────────────────────────────────────────────────────────
+
+// Default thresholds (actions within timeWindow ms trigger punishment)
+const AN_DEFAULTS = {
+  enabled: false,
+  logChannel: null,
+  punishment: 'ban',         // 'ban' | 'kick' | 'strip' (strip all roles)
+  whitelist: [],             // user IDs exempt from anti-nuke
+  thresholds: {
+    ban:           { limit: 3,  window: 10000 },
+    kick:          { limit: 3,  window: 10000 },
+    channelDelete: { limit: 3,  window: 10000 },
+    channelCreate: { limit: 5,  window: 10000 },
+    roleDelete:    { limit: 3,  window: 10000 },
+    webhookCreate: { limit: 3,  window: 10000 },
+  },
+};
+
+function getAN(guildId) {
+  if (!antinukeConfig[guildId]) antinukeConfig[guildId] = JSON.parse(JSON.stringify(AN_DEFAULTS));
+  // Ensure all keys exist (for older saved configs)
+  const cfg = antinukeConfig[guildId];
+  if (!cfg.thresholds) cfg.thresholds = JSON.parse(JSON.stringify(AN_DEFAULTS.thresholds));
+  if (cfg.whitelist === undefined) cfg.whitelist = [];
+  if (cfg.punishment === undefined) cfg.punishment = 'ban';
+  return cfg;
+}
+
+// In-memory action tracker: Map<guildId, Map<userId, Map<action, timestamp[]>>>
+const nukeTracker = new Map();
+
+function trackAction(guildId, userId, action) {
+  if (!nukeTracker.has(guildId)) nukeTracker.set(guildId, new Map());
+  const guild = nukeTracker.get(guildId);
+  if (!guild.has(userId)) guild.set(userId, new Map());
+  const user = guild.get(userId);
+  if (!user.has(action)) user.set(action, []);
+  const now = Date.now();
+  const timestamps = user.get(action);
+  timestamps.push(now);
+  const cfg = getAN(guildId);
+  const thr = cfg.thresholds[action];
+  // Clean up old entries outside window
+  const fresh = timestamps.filter(t => now - t < (thr?.window || 10000));
+  user.set(action, fresh);
+  return fresh.length;
+}
+
+async function punishNuker(guild, userId, action, count) {
+  const cfg = getAN(guild.id);
+  const member = await guild.members.fetch(userId).catch(() => null);
+  if (!member) return;
+
+  // Never punish the bot itself or the server owner
+  if (userId === client.user.id) return;
+  if (userId === guild.ownerId) return;
+
+  const actionLabel = {
+    ban: 'Mass Ban',
+    kick: 'Mass Kick',
+    channelDelete: 'Mass Channel Delete',
+    channelCreate: 'Mass Channel Create',
+    roleDelete: 'Mass Role Delete',
+    webhookCreate: 'Mass Webhook Create',
+  }[action] || action;
+
+  // Strip all dangerous permissions / roles first
+  const safeRoles = member.roles.cache.filter(r => r.id !== guild.id).map(r => r.id);
+
+  try {
+    switch (cfg.punishment) {
+      case 'ban':
+        await guild.members.ban(userId, { reason: `[Anti-Nuke] ${actionLabel} detected (${count} actions)` });
+        break;
+      case 'kick':
+        await member.kick(`[Anti-Nuke] ${actionLabel} detected (${count} actions)`);
+        break;
+      case 'strip':
+        await member.roles.set([], `[Anti-Nuke] ${actionLabel} detected (${count} actions)`).catch(() => {});
+        await member.timeout(28 * 24 * 60 * 60 * 1000, `[Anti-Nuke] ${actionLabel} detected`).catch(() => {});
+        break;
+    }
+  } catch (e) {
+    console.error('[Anti-Nuke] Failed to punish:', e.message);
+  }
+
+  // Log to channel if set
+  if (cfg.logChannel) {
+    const logCh = guild.channels.cache.get(cfg.logChannel);
+    if (logCh) {
+      const embed = new EmbedBuilder()
+        .setColor(0xE74C3C)
+        .setTitle('🚨 Anti-Nuke Triggered!')
+        .setDescription(`A user was punished for suspicious activity.`)
+        .addFields(
+          { name: '👤 User',       value: `<@${userId}> (\`${userId}\`)`, inline: true },
+          { name: '⚡ Trigger',    value: actionLabel,                     inline: true },
+          { name: '🔢 Actions',    value: `${count} in quick succession`,  inline: true },
+          { name: '🔨 Punishment', value: cfg.punishment.toUpperCase(),    inline: true },
+        )
+        .setTimestamp();
+      logCh.send({ embeds: [embed] }).catch(() => {});
+    }
+  }
+}
+
+async function handleAntiNuke(guild, userId, action) {
+  if (!guild) return;
+  const cfg = getAN(guild.id);
+  if (!cfg.enabled) return;
+  if (!userId) return;
+  if (cfg.whitelist.includes(userId)) return;
+  if (userId === guild.ownerId) return;
+  if (userId === client.user.id) return;
+
+  // Check if executor is an admin — whitelist all admins optionally (no, we still watch admins; only explicit whitelist skips)
+  const count = trackAction(guild.id, userId, action);
+  const thr = cfg.thresholds[action];
+  if (!thr) return;
+  if (count >= thr.limit) {
+    // Reset tracker so we don't fire multiple times for same burst
+    const tracker = nukeTracker.get(guild.id)?.get(userId);
+    if (tracker) tracker.set(action, []);
+    await punishNuker(guild, userId, action, count);
+  }
+}
+
+// Audit log helper — fetches the latest entry of a given type
+async function getAuditExecutor(guild, type) {
+  try {
+    const logs = await guild.fetchAuditLogs({ limit: 1, type });
+    const entry = logs.entries.first();
+    if (!entry) return null;
+    // Only return if it happened in the last 5 seconds
+    if (Date.now() - entry.createdTimestamp > 5000) return null;
+    return entry.executor?.id || null;
+  } catch {
+    return null;
+  }
+}
+
+// ── Anti-Nuke Event Listeners ──
+
+client.on('guildBanAdd', async ban => {
+  const executor = await getAuditExecutor(ban.guild, AuditLogEvent.MemberBanAdd);
+  if (executor) await handleAntiNuke(ban.guild, executor, 'ban');
+});
+
+client.on('guildMemberRemove', async member => {
+  const executor = await getAuditExecutor(member.guild, AuditLogEvent.MemberKick);
+  if (executor) await handleAntiNuke(member.guild, executor, 'kick');
+});
+
+client.on('channelDelete', async channel => {
+  if (!channel.guild) return;
+  const executor = await getAuditExecutor(channel.guild, AuditLogEvent.ChannelDelete);
+  if (executor) await handleAntiNuke(channel.guild, executor, 'channelDelete');
+});
+
+client.on('channelCreate', async channel => {
+  if (!channel.guild) return;
+  const executor = await getAuditExecutor(channel.guild, AuditLogEvent.ChannelCreate);
+  if (executor) await handleAntiNuke(channel.guild, executor, 'channelCreate');
+});
+
+client.on('roleDelete', async role => {
+  const executor = await getAuditExecutor(role.guild, AuditLogEvent.RoleDelete);
+  if (executor) await handleAntiNuke(role.guild, executor, 'roleDelete');
+});
+
+client.on('webhookUpdate', async channel => {
+  if (!channel.guild) return;
+  const executor = await getAuditExecutor(channel.guild, AuditLogEvent.WebhookCreate);
+  if (executor) await handleAntiNuke(channel.guild, executor, 'webhookCreate');
+});
+
+// ─────────────────────────────────────────────────────────────
 // AUTOMOD RULE DEFINITIONS
-// NOTE: build() returns ONLY the core actions (BlockMessage, Timeout).
-// SendAlertMessage is injected separately in createRule() / updateAllLogChannels()
-// so we never send a bare SendAlertMessage with no channel to Discord.
 // ─────────────────────────────────────────────────────────────
 const RULE_DEFS = {
   keyword: {
@@ -87,7 +267,6 @@ const RULE_DEFS = {
       eventType: 1,
       triggerType: 1,
       triggerMetadata: { keywordFilter: [], regexPatterns: [] },
-      // Only BlockMessage here — alert injected later if log channel exists
       actions: [
         { type: AutoModerationActionType.BlockMessage, metadata: { customMessage: '🚫 Your message was blocked by AutoMod.' } },
       ],
@@ -190,15 +369,12 @@ async function createRule(guild, key) {
   const def   = RULE_DEFS[key];
   const logCh = cfg.logChannel;
   const built = def.build(cfg.exemptRoles, cfg.exemptChannels);
-
-  // Only inject SendAlertMessage if we have a valid log channel
   if (logCh) {
     built.actions.push({
       type: AutoModerationActionType.SendAlertMessage,
       metadata: { channel: logCh },
     });
   }
-
   return guild.autoModerationRules.create(built);
 }
 
@@ -213,40 +389,32 @@ async function updateAllRuleExemptions(guild) {
 async function updateAllLogChannels(guild, channelId) {
   const rules = await fetchBotRules(guild);
   for (const [, rule] of rules) {
-    // Strip any existing SendAlertMessage actions, keep everything else
     const baseActions = rule.actions
       .filter(a => a.type !== AutoModerationActionType.SendAlertMessage)
       .map(a => {
         const rebuilt = { type: a.type };
-        if (a.metadata && Object.keys(a.metadata).length > 0) {
-          rebuilt.metadata = a.metadata;
-        }
+        if (a.metadata && Object.keys(a.metadata).length > 0) rebuilt.metadata = a.metadata;
         return rebuilt;
       });
-
-    // Only add SendAlertMessage if we have a channel
     if (channelId) {
       baseActions.push({
         type: AutoModerationActionType.SendAlertMessage,
         metadata: { channel: channelId },
       });
     }
-
     await rule.edit({ actions: baseActions }).catch(console.error);
   }
 }
 
-// Build the full /automod dashboard status embed
 async function buildStatusEmbed(guild) {
   const cfg    = getAMConfig(guild.id);
   const rules  = await fetchBotRules(guild);
   const fields = [];
 
   for (const [key, def] of Object.entries(RULE_DEFS)) {
-    const rule    = rules.find(r => r.name === def.name);
-    const status  = rule ? (rule.enabled ? '✅ Active' : '⏸️ Disabled') : '❌ Not set up';
-    let detail    = '';
-
+    const rule   = rules.find(r => r.name === def.name);
+    const status = rule ? (rule.enabled ? '✅ Active' : '⏸️ Disabled') : '❌ Not set up';
+    let detail   = '';
     if (rule && key === 'keyword') {
       const kw = rule.triggerMetadata.keywordFilter || [];
       const re = rule.triggerMetadata.regexPatterns || [];
@@ -257,13 +425,12 @@ async function buildStatusEmbed(guild) {
       const lim = rule.triggerMetadata.mentionTotalLimit;
       detail = `\n> Limit: ${lim} mentions per message`;
     }
-
     fields.push({ name: `${def.label} — ${status}`, value: def.desc + detail, inline: false });
   }
 
-  const logCh    = cfg.logChannel ? `<#${cfg.logChannel}>` : 'Not set';
-  const exempt   = cfg.exemptRoles.length > 0 ? cfg.exemptRoles.map(id => `<@&${id}>`).join(', ') : 'None';
-  const exCh     = cfg.exemptChannels.length > 0 ? cfg.exemptChannels.map(id => `<#${id}>`).join(', ') : 'None';
+  const logCh      = cfg.logChannel ? `<#${cfg.logChannel}>` : 'Not set';
+  const exempt     = cfg.exemptRoles.length > 0 ? cfg.exemptRoles.map(id => `<@&${id}>`).join(', ') : 'None';
+  const exCh       = cfg.exemptChannels.length > 0 ? cfg.exemptChannels.map(id => `<#${id}>`).join(', ') : 'None';
   const activeCount = rules.filter(r => r.enabled).size;
 
   return new EmbedBuilder()
@@ -272,9 +439,9 @@ async function buildStatusEmbed(guild) {
     .setDescription(`**${activeCount}** active rule(s) • **${rules.size}** total bot rule(s)`)
     .addFields(
       ...fields,
-      { name: '📋 Log Channel',       value: logCh,  inline: true },
-      { name: '🔓 Exempt Roles',      value: exempt,  inline: true },
-      { name: '📵 Exempt Channels',   value: exCh,    inline: true },
+      { name: '📋 Log Channel',     value: logCh,  inline: true },
+      { name: '🔓 Exempt Roles',    value: exempt,  inline: true },
+      { name: '📵 Exempt Channels', value: exCh,    inline: true },
     )
     .setFooter({ text: 'Use /automod to manage • Powered by Discord native AutoMod' })
     .setTimestamp();
@@ -314,8 +481,14 @@ const commands = [
   // Moderation
   new SlashCommandBuilder().setName('clear').setDescription('Delete messages')
     .addIntegerOption(o => o.setName('amount').setDescription('1-100').setRequired(true).setMinValue(1).setMaxValue(100)),
+
+  // ── ANNOUNCE (FIXED) ──
+  // Channel is selected via slash option; message text is entered in a modal.
+  // The modal now also has a "mention" field so users can @mention roles/users.
   new SlashCommandBuilder().setName('announce').setDescription('Send an announcement')
-    .addChannelOption(o => o.setName('channel').setDescription('Channel to send the announcement in').setRequired(true)),
+    .addChannelOption(o => o.setName('channel').setDescription('Channel to send the announcement in').setRequired(true))
+    .addBooleanOption(o => o.setName('ping_everyone').setDescription('Ping @everyone with the announcement? (default: false)')),
+
   new SlashCommandBuilder().setName('kick').setDescription('Kick a member')
     .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
     .addStringOption(o => o.setName('reason').setDescription('Reason')),
@@ -371,20 +544,20 @@ const commands = [
     .addSubcommand(s => s.setName('enable').setDescription('Enable a specific AutoMod rule')
       .addStringOption(o => o.setName('rule').setDescription('Rule to enable').setRequired(true)
         .addChoices(
-          { name: '🚫 Keyword Filter',   value: 'keyword'  },
-          { name: '🔗 Invite Links',     value: 'invites'  },
-          { name: '⚡ Spam Detection',   value: 'spam'     },
-          { name: '🔔 Mention Spam',     value: 'mentions' },
-          { name: '☣️ Harmful Content',  value: 'harmful'  },
+          { name: '🚫 Keyword Filter',  value: 'keyword'  },
+          { name: '🔗 Invite Links',    value: 'invites'  },
+          { name: '⚡ Spam Detection',  value: 'spam'     },
+          { name: '🔔 Mention Spam',    value: 'mentions' },
+          { name: '☣️ Harmful Content', value: 'harmful'  },
         )))
     .addSubcommand(s => s.setName('pause').setDescription('Pause (disable) a specific AutoMod rule')
       .addStringOption(o => o.setName('rule').setDescription('Rule to pause').setRequired(true)
         .addChoices(
-          { name: '🚫 Keyword Filter',   value: 'keyword'  },
-          { name: '🔗 Invite Links',     value: 'invites'  },
-          { name: '⚡ Spam Detection',   value: 'spam'     },
-          { name: '🔔 Mention Spam',     value: 'mentions' },
-          { name: '☣️ Harmful Content',  value: 'harmful'  },
+          { name: '🚫 Keyword Filter',  value: 'keyword'  },
+          { name: '🔗 Invite Links',    value: 'invites'  },
+          { name: '⚡ Spam Detection',  value: 'spam'     },
+          { name: '🔔 Mention Spam',    value: 'mentions' },
+          { name: '☣️ Harmful Content', value: 'harmful'  },
         )))
     .addSubcommand(s => s.setName('addword').setDescription('Add a blocked keyword')
       .addStringOption(o => o.setName('word').setDescription('Word or phrase').setRequired(true)))
@@ -408,6 +581,37 @@ const commands = [
       .addChannelOption(o => o.setName('channel').setDescription('Channel').setRequired(true)))
     .addSubcommand(s => s.setName('unexemptchannel').setDescription('Remove channel exemption')
       .addChannelOption(o => o.setName('channel').setDescription('Channel').setRequired(true))),
+
+  // ── ANTI-NUKE ──
+  new SlashCommandBuilder().setName('antinuke').setDescription('Manage the Anti-Nuke protection system')
+    .addSubcommand(s => s.setName('enable').setDescription('Enable Anti-Nuke protection'))
+    .addSubcommand(s => s.setName('disable').setDescription('Disable Anti-Nuke protection'))
+    .addSubcommand(s => s.setName('status').setDescription('View current Anti-Nuke configuration'))
+    .addSubcommand(s => s.setName('setlog').setDescription('Set the Anti-Nuke alert log channel')
+      .addChannelOption(o => o.setName('channel').setDescription('Log channel').setRequired(true)))
+    .addSubcommand(s => s.setName('punishment').setDescription('Set the punishment for nukers')
+      .addStringOption(o => o.setName('type').setDescription('Punishment type').setRequired(true)
+        .addChoices(
+          { name: '🔨 Ban (recommended)',        value: 'ban'   },
+          { name: '👢 Kick',                     value: 'kick'  },
+          { name: '🔕 Strip Roles + Max Timeout', value: 'strip' },
+        )))
+    .addSubcommand(s => s.setName('whitelist').setDescription('Whitelist a user from Anti-Nuke')
+      .addUserOption(o => o.setName('user').setDescription('User to whitelist').setRequired(true)))
+    .addSubcommand(s => s.setName('unwhitelist').setDescription('Remove a user from the whitelist')
+      .addUserOption(o => o.setName('user').setDescription('User to remove').setRequired(true)))
+    .addSubcommand(s => s.setName('threshold').setDescription('Set action threshold (how many actions trigger punishment)')
+      .addStringOption(o => o.setName('action').setDescription('Action type').setRequired(true)
+        .addChoices(
+          { name: 'Ban',            value: 'ban'           },
+          { name: 'Kick',           value: 'kick'          },
+          { name: 'Channel Delete', value: 'channelDelete' },
+          { name: 'Channel Create', value: 'channelCreate' },
+          { name: 'Role Delete',    value: 'roleDelete'    },
+          { name: 'Webhook Create', value: 'webhookCreate' },
+        ))
+      .addIntegerOption(o => o.setName('limit').setDescription('Max actions allowed before punishment (1-10)').setRequired(true).setMinValue(1).setMaxValue(10))
+      .addIntegerOption(o => o.setName('window').setDescription('Time window in seconds (3-60)').setRequired(true).setMinValue(3).setMaxValue(60))),
 
 ].map(c => c.toJSON());
 
@@ -587,13 +791,10 @@ client.on('messageCreate', async message => {
       .setTimestamp()]});
   }
 
-  // ─────────────────────────────────────────────────────────
-  // ?membercount — shows ONLY human members
-  // ─────────────────────────────────────────────────────────
+  // ?membercount
   if (message.content.toLowerCase() === '?membercount') {
     await message.guild.members.fetch();
     const humans = message.guild.members.cache.filter(m => !m.user.bot).size;
-
     return message.channel.send({ embeds: [new EmbedBuilder()
       .setColor(0x5865F2)
       .setAuthor({ name: message.guild.name, iconURL: message.guild.iconURL({ dynamic: true }) || undefined })
@@ -655,16 +856,38 @@ client.on('interactionCreate', async interaction => {
     return;
   }
 
-  // ── MODAL: announce submit ──
+  // ── MODAL SUBMIT ──
   if (interaction.isModalSubmit()) {
+
+    // ── Announce modal ──
     if (interaction.customId.startsWith('announce_modal_')) {
-      const channelId = interaction.customId.replace('announce_modal_', '');
-      const message = interaction.fields.getTextInputValue('announce_message');
+      // Format: announce_modal_{channelId}_{pingEveryone}
+      const parts       = interaction.customId.replace('announce_modal_', '').split('_');
+      const pingEveryone = parts.pop() === 'true';
+      const channelId   = parts.join('_'); // re-join in case channel IDs had underscores (they don't, but safe)
+
+      const messageText  = interaction.fields.getTextInputValue('announce_message');
+      const mentionText  = interaction.fields.getTextInputValue('announce_mention').trim();
       const targetChannel = interaction.guild.channels.cache.get(channelId);
+
       if (!targetChannel) return interaction.reply({ content: '❌ Channel not found.', ephemeral: true });
-      await targetChannel.send({ embeds: [new EmbedBuilder().setColor('Blue').setDescription(message).setTimestamp()] });
+
+      // Build content string: optional ping + optional custom mention
+      let content = '';
+      if (pingEveryone) content += '@everyone ';
+      if (mentionText)  content += mentionText + ' ';
+      content = content.trim();
+
+      const embed = new EmbedBuilder()
+        .setColor('Blue')
+        .setDescription(messageText)
+        .setFooter({ text: `Announced by ${interaction.user.tag}` })
+        .setTimestamp();
+
+      await targetChannel.send({ content: content || undefined, embeds: [embed], allowedMentions: { parse: ['everyone', 'roles', 'users'] } });
       return interaction.reply({ content: `✅ Announcement sent in ${targetChannel}.`, ephemeral: true });
     }
+
     return;
   }
 
@@ -677,6 +900,103 @@ client.on('interactionCreate', async interaction => {
   const canMute = isAdmin || member.permissions.has(PermissionsBitField.Flags.ModerateMembers);
 
   // ════════════════════════════════════════════
+  // ANTI-NUKE COMMANDS
+  // ════════════════════════════════════════════
+  if (commandName === 'antinuke') {
+    // Only the server owner can configure anti-nuke
+    if (interaction.user.id !== guild.ownerId) {
+      return interaction.reply({ content: '❌ Only the **server owner** can configure Anti-Nuke.', ephemeral: true });
+    }
+    const sub = interaction.options.getSubcommand();
+    const cfg = getAN(guild.id);
+
+    if (sub === 'enable') {
+      cfg.enabled = true;
+      saveAntinuke();
+      return interaction.reply({ embeds: [new EmbedBuilder()
+        .setColor(0x2ECC71)
+        .setTitle('🛡️ Anti-Nuke Enabled')
+        .setDescription('The server is now protected against mass destructive actions.')
+        .addFields(
+          { name: '🔨 Punishment',  value: cfg.punishment.toUpperCase(), inline: true },
+          { name: '📋 Log Channel', value: cfg.logChannel ? `<#${cfg.logChannel}>` : 'Not set', inline: true },
+        )
+        .setFooter({ text: 'Use /antinuke threshold to adjust limits' })
+        .setTimestamp()] });
+    }
+
+    if (sub === 'disable') {
+      cfg.enabled = false;
+      saveAntinuke();
+      return interaction.reply({ embeds: [new EmbedBuilder()
+        .setColor(0xE74C3C)
+        .setTitle('🛡️ Anti-Nuke Disabled')
+        .setDescription('Anti-Nuke protection has been turned off.')
+        .setTimestamp()] });
+    }
+
+    if (sub === 'status') {
+      const thr = cfg.thresholds;
+      const wl  = cfg.whitelist.length > 0 ? cfg.whitelist.map(id => `<@${id}>`).join(', ') : 'None';
+      return interaction.reply({ embeds: [new EmbedBuilder()
+        .setColor(cfg.enabled ? 0x2ECC71 : 0xE74C3C)
+        .setTitle('🛡️ Anti-Nuke Status')
+        .setDescription(cfg.enabled ? '✅ **Enabled** — Server is protected' : '❌ **Disabled** — Server is unprotected')
+        .addFields(
+          { name: '🔨 Punishment',      value: cfg.punishment.toUpperCase(),                                            inline: true },
+          { name: '📋 Log Channel',     value: cfg.logChannel ? `<#${cfg.logChannel}>` : 'Not set',                   inline: true },
+          { name: '🔓 Whitelist',       value: wl,                                                                      inline: false },
+          { name: '📊 Thresholds',      value:
+            `**Ban:** ${thr.ban.limit} in ${thr.ban.window / 1000}s\n` +
+            `**Kick:** ${thr.kick.limit} in ${thr.kick.window / 1000}s\n` +
+            `**Channel Delete:** ${thr.channelDelete.limit} in ${thr.channelDelete.window / 1000}s\n` +
+            `**Channel Create:** ${thr.channelCreate.limit} in ${thr.channelCreate.window / 1000}s\n` +
+            `**Role Delete:** ${thr.roleDelete.limit} in ${thr.roleDelete.window / 1000}s\n` +
+            `**Webhook Create:** ${thr.webhookCreate.limit} in ${thr.webhookCreate.window / 1000}s`,
+            inline: false },
+        )
+        .setTimestamp()], ephemeral: true });
+    }
+
+    if (sub === 'setlog') {
+      const channel = interaction.options.getChannel('channel');
+      cfg.logChannel = channel.id;
+      saveAntinuke();
+      return interaction.reply(`✅ Anti-Nuke alerts will be sent to ${channel}.`);
+    }
+
+    if (sub === 'punishment') {
+      const type = interaction.options.getString('type');
+      cfg.punishment = type;
+      saveAntinuke();
+      const labels = { ban: '🔨 Ban', kick: '👢 Kick', strip: '🔕 Strip Roles + Timeout' };
+      return interaction.reply(`✅ Anti-Nuke punishment set to **${labels[type]}**.`);
+    }
+
+    if (sub === 'whitelist') {
+      const user = interaction.options.getUser('user');
+      if (!cfg.whitelist.includes(user.id)) { cfg.whitelist.push(user.id); saveAntinuke(); }
+      return interaction.reply(`✅ **${user.tag}** is now whitelisted from Anti-Nuke.`);
+    }
+
+    if (sub === 'unwhitelist') {
+      const user = interaction.options.getUser('user');
+      cfg.whitelist = cfg.whitelist.filter(id => id !== user.id);
+      saveAntinuke();
+      return interaction.reply(`✅ **${user.tag}** removed from the Anti-Nuke whitelist.`);
+    }
+
+    if (sub === 'threshold') {
+      const action = interaction.options.getString('action');
+      const limit  = interaction.options.getInteger('limit');
+      const window = interaction.options.getInteger('window') * 1000;
+      cfg.thresholds[action] = { limit, window };
+      saveAntinuke();
+      return interaction.reply(`✅ **${action}** threshold set to **${limit}** actions within **${window / 1000}s**.`);
+    }
+  }
+
+  // ════════════════════════════════════════════
   // AUTOMOD
   // ════════════════════════════════════════════
   if (commandName === 'automod') {
@@ -685,13 +1005,10 @@ client.on('interactionCreate', async interaction => {
     const sub = interaction.options.getSubcommand();
     const cfg = getAMConfig(guild.id);
 
-    // ── dashboard ──
     if (sub === 'dashboard') {
       const embed = await buildStatusEmbed(guild);
       return interaction.editReply({ embeds: [embed] });
     }
-
-    // ── setup ──
     if (sub === 'setup') {
       const created = [];
       for (const key of Object.keys(RULE_DEFS)) {
@@ -705,28 +1022,19 @@ client.on('interactionCreate', async interaction => {
         .setTimestamp();
       return interaction.editReply({ embeds: [embed] });
     }
-
-    // ── disable ──
     if (sub === 'disable') {
       const rules = await fetchBotRules(guild);
       if (!rules.size) return interaction.editReply('⚠️ No bot-created rules found.');
       for (const [, r] of rules) await r.delete().catch(() => {});
       return interaction.editReply(`✅ Deleted **${rules.size}** AutoMod rule(s).`);
     }
-
-    // ── enable specific rule ──
     if (sub === 'enable') {
       const key  = interaction.options.getString('rule');
       const rule = await findRule(guild, key);
-      if (!rule) {
-        await createRule(guild, key);
-        return interaction.editReply(`✅ **${RULE_DEFS[key].label}** rule created and enabled.`);
-      }
+      if (!rule) { await createRule(guild, key); return interaction.editReply(`✅ **${RULE_DEFS[key].label}** rule created and enabled.`); }
       await rule.edit({ enabled: true });
       return interaction.editReply(`✅ **${RULE_DEFS[key].label}** has been enabled.`);
     }
-
-    // ── pause specific rule ──
     if (sub === 'pause') {
       const key  = interaction.options.getString('rule');
       const rule = await findRule(guild, key);
@@ -734,8 +1042,6 @@ client.on('interactionCreate', async interaction => {
       await rule.edit({ enabled: false });
       return interaction.editReply(`⏸️ **${RULE_DEFS[key].label}** has been paused.`);
     }
-
-    // ── addword ──
     if (sub === 'addword') {
       const word = interaction.options.getString('word').toLowerCase();
       const rule = await findRule(guild, 'keyword');
@@ -746,8 +1052,6 @@ client.on('interactionCreate', async interaction => {
       await rule.edit({ triggerMetadata: { keywordFilter: kw, regexPatterns: rule.triggerMetadata.regexPatterns || [] } });
       return interaction.editReply(`✅ Added \`${word}\` to the keyword filter. (**${kw.length}** keywords total)`);
     }
-
-    // ── removeword ──
     if (sub === 'removeword') {
       const word = interaction.options.getString('word').toLowerCase();
       const rule = await findRule(guild, 'keyword');
@@ -757,8 +1061,6 @@ client.on('interactionCreate', async interaction => {
       await rule.edit({ triggerMetadata: { keywordFilter: kw, regexPatterns: rule.triggerMetadata.regexPatterns || [] } });
       return interaction.editReply(`✅ Removed \`${word}\`. (**${kw.length}** keywords remaining)`);
     }
-
-    // ── listwords ──
     if (sub === 'listwords') {
       const rule = await findRule(guild, 'keyword');
       if (!rule) return interaction.editReply('❌ Keyword Filter not set up.');
@@ -772,8 +1074,6 @@ client.on('interactionCreate', async interaction => {
         ).setTimestamp();
       return interaction.editReply({ embeds: [embed] });
     }
-
-    // ── addregex ──
     if (sub === 'addregex') {
       const pattern = interaction.options.getString('pattern');
       try { new RegExp(pattern); } catch { return interaction.editReply('❌ Invalid regex pattern.'); }
@@ -786,8 +1086,6 @@ client.on('interactionCreate', async interaction => {
       await rule.edit({ triggerMetadata: { keywordFilter: rule.triggerMetadata.keywordFilter || [], regexPatterns: re } });
       return interaction.editReply(`✅ Added regex pattern \`${pattern}\`.`);
     }
-
-    // ── removeregex ──
     if (sub === 'removeregex') {
       const pattern = interaction.options.getString('pattern');
       const rule = await findRule(guild, 'keyword');
@@ -797,8 +1095,6 @@ client.on('interactionCreate', async interaction => {
       await rule.edit({ triggerMetadata: { keywordFilter: rule.triggerMetadata.keywordFilter || [], regexPatterns: re } });
       return interaction.editReply(`✅ Removed regex pattern \`${pattern}\`.`);
     }
-
-    // ── mentionlimit ──
     if (sub === 'mentionlimit') {
       const limit = interaction.options.getInteger('limit');
       const rule  = await findRule(guild, 'mentions');
@@ -806,8 +1102,6 @@ client.on('interactionCreate', async interaction => {
       await rule.edit({ triggerMetadata: { mentionTotalLimit: limit, mentionRaidProtectionEnabled: true } });
       return interaction.editReply(`✅ Mention limit set to **${limit}** mentions per message.`);
     }
-
-    // ── setlog ──
     if (sub === 'setlog') {
       const channel = interaction.options.getChannel('channel');
       cfg.logChannel = channel.id;
@@ -815,24 +1109,18 @@ client.on('interactionCreate', async interaction => {
       await updateAllLogChannels(guild, channel.id);
       return interaction.editReply(`✅ AutoMod alerts will now be sent to ${channel}.`);
     }
-
-    // ── removelog ──
     if (sub === 'removelog') {
       cfg.logChannel = null;
       saveAutomod();
       await updateAllLogChannels(guild, null);
       return interaction.editReply('✅ AutoMod log channel removed. Alert actions have been stripped from all rules.');
     }
-
-    // ── exemptrole ──
     if (sub === 'exemptrole') {
       const role = interaction.options.getRole('role');
       if (!cfg.exemptRoles.includes(role.id)) { cfg.exemptRoles.push(role.id); saveAutomod(); }
       await updateAllRuleExemptions(guild);
       return interaction.editReply(`✅ **${role.name}** is now exempt from all AutoMod rules.`);
     }
-
-    // ── unexemptrole ──
     if (sub === 'unexemptrole') {
       const role = interaction.options.getRole('role');
       cfg.exemptRoles = cfg.exemptRoles.filter(id => id !== role.id);
@@ -840,16 +1128,12 @@ client.on('interactionCreate', async interaction => {
       await updateAllRuleExemptions(guild);
       return interaction.editReply(`✅ **${role.name}** is no longer exempt.`);
     }
-
-    // ── exemptchannel ──
     if (sub === 'exemptchannel') {
       const ch = interaction.options.getChannel('channel');
       if (!cfg.exemptChannels.includes(ch.id)) { cfg.exemptChannels.push(ch.id); saveAutomod(); }
       await updateAllRuleExemptions(guild);
       return interaction.editReply(`✅ ${ch} is now exempt from all AutoMod rules.`);
     }
-
-    // ── unexemptchannel ──
     if (sub === 'unexemptchannel') {
       const ch = interaction.options.getChannel('channel');
       cfg.exemptChannels = cfg.exemptChannels.filter(id => id !== ch.id);
@@ -957,20 +1241,37 @@ client.on('interactionCreate', async interaction => {
       .setFooter({ text: `ID: ${targetUser.id}` }).setTimestamp()] });
   }
 
+  // ── ANNOUNCE (FIXED) ──
   if (commandName === 'announce') {
     if (!isMod) return interaction.reply({ content: '❌ You need **Manage Messages** permission.', ephemeral: true });
     const targetChannel = interaction.options.getChannel('channel');
+    const pingEveryone  = interaction.options.getBoolean('ping_everyone') ?? false;
+
     const modal = new ModalBuilder()
-      .setCustomId(`announce_modal_${targetChannel.id}`)
+      .setCustomId(`announce_modal_${targetChannel.id}_${pingEveryone}`)
       .setTitle('Send Announcement');
+
     const msgInput = new TextInputBuilder()
       .setCustomId('announce_message')
-      .setLabel('Message')
+      .setLabel('Announcement Message')
       .setStyle(TextInputStyle.Paragraph)
-      .setPlaceholder('Type your announcement here...\nYou can use Enter for new lines.')
+      .setPlaceholder('Type your announcement here...\nSupports Discord markdown formatting.')
       .setRequired(true)
       .setMaxLength(4000);
-    modal.addComponents(new ActionRowBuilder().addComponents(msgInput));
+
+    // New: optional mention field — user types @Role or @User name/ID here
+    const mentionInput = new TextInputBuilder()
+      .setCustomId('announce_mention')
+      .setLabel('Ping (optional) — e.g. <@&ROLE_ID> or <@USER_ID>')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('Leave blank for no extra ping')
+      .setRequired(false)
+      .setMaxLength(200);
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(msgInput),
+      new ActionRowBuilder().addComponents(mentionInput),
+    );
     return interaction.showModal(modal);
   }
 
@@ -988,13 +1289,18 @@ client.on('interactionCreate', async interaction => {
   if (commandName === 'help') {
     const autoRules  = await guild.autoModerationRules.fetch().catch(() => null);
     const hasAutoMod = autoRules && autoRules.size > 0;
+    const anCfg      = getAN(guild.id);
     return interaction.reply({ embeds: [new EmbedBuilder().setTitle('🤖 Bot Commands').setColor('Blue')
-      .setDescription(hasAutoMod ? '🛡️ `Uses Discord AutoMod`' : null)
+      .setDescription(
+        (hasAutoMod ? '🛡️ `Uses Discord AutoMod`' : '') +
+        (anCfg.enabled ? '\n🔒 `Anti-Nuke is Active`' : '')
+      )
       .addFields(
         { name: '⚔️ Moderation',  value: '`/kick` `/ban` `/warn` `/warnings` `/clearwarnings` `/mute` `/unmute` `/clear` `/announce`' },
         { name: '📈 Levels & XP', value: '`/level` `/addxp` `/removexp` `/leaderboard` `/setxpchannel`' },
         { name: '💰 Economy',     value: '`/cash` `/deposit` `/withdraw` `/daily` `/give` `/fish` `/rob` `/gamble` `/shop` `/buy`' },
         { name: '🛡️ AutoMod',    value: '`/automod dashboard` `setup` `enable` `pause` `disable`\n`addword` `removeword` `listwords` `addregex` `removeregex`\n`mentionlimit` `setlog` `removelog` `exemptrole` `exemptchannel`' },
+        { name: '🔒 Anti-Nuke',   value: '`/antinuke enable` `disable` `status` `setlog` `punishment`\n`whitelist` `unwhitelist` `threshold`' },
         { name: '⚙️ Setup',       value: '`/setwelcome` `/setautorole` `/setxpchannel`' },
         { name: '🔧 Utility',     value: '`/afk` `/ping` `/serverinfo` `?rules` `?membercount` `?lock` `?unlock`' },
       )
@@ -1022,22 +1328,20 @@ client.on('interactionCreate', async interaction => {
     const boostTier   = guild.premiumTier ? `Tier ${guild.premiumTier}` : 'None';
     const verif       = ['None', 'Low', 'Medium', 'High', 'Very High'][guild.verificationLevel] || 'Unknown';
     const created     = `<t:${Math.floor(guild.createdTimestamp / 1000)}:D>`;
-
     const embed = new EmbedBuilder()
       .setColor(0x5865F2)
       .setAuthor({ name: guild.name, iconURL: guild.iconURL({ dynamic: true }) || undefined })
       .setThumbnail(guild.iconURL({ dynamic: true, size: 256 }))
       .addFields(
-        { name: '👑 Owner',          value: `${owner}`,                                                                    inline: true },
-        { name: '🆔 Server ID',      value: `\`${guild.id}\``,                                                            inline: true },
-        { name: '📅 Created',        value: created,                                                                       inline: true },
-        { name: '👥 Members',        value: `👤 Humans: **${humans}**\n🤖 Bots: **${bots}**\n🟢 Online: **${online}**\n📊 Total: **${total}**`, inline: true },
-        { name: '💬 Channels',       value: `💬 Text: **${textCh}**\n🔊 Voice: **${voiceCh}**\n📁 Categories: **${categories}**`,               inline: true },
-        { name: '✨ Server Info',    value: `🏷️ Roles: **${roles}**\n😀 Emojis: **${emojis}**\n🚀 Boosts: **${boosts}** (${boostTier})\n🔒 Verification: **${verif}**`, inline: true },
+        { name: '👑 Owner',        value: `${owner}`,                                                                    inline: true },
+        { name: '🆔 Server ID',    value: `\`${guild.id}\``,                                                            inline: true },
+        { name: '📅 Created',      value: created,                                                                       inline: true },
+        { name: '👥 Members',      value: `👤 Humans: **${humans}**\n🤖 Bots: **${bots}**\n🟢 Online: **${online}**\n📊 Total: **${total}**`, inline: true },
+        { name: '💬 Channels',     value: `💬 Text: **${textCh}**\n🔊 Voice: **${voiceCh}**\n📁 Categories: **${categories}**`,               inline: true },
+        { name: '✨ Server Info',  value: `🏷️ Roles: **${roles}**\n😀 Emojis: **${emojis}**\n🚀 Boosts: **${boosts}** (${boostTier})\n🔒 Verification: **${verif}**`, inline: true },
       )
       .setFooter({ text: `${total} total members`, iconURL: guild.iconURL({ dynamic: true }) || undefined })
       .setTimestamp();
-
     if (guild.bannerURL()) embed.setImage(guild.bannerURL({ size: 1024 }));
     return interaction.reply({ embeds: [embed] });
   }
@@ -1063,22 +1367,20 @@ client.on('interactionCreate', async interaction => {
 
   if (commandName === 'setwelcome') {
     if (!isAdmin) return interaction.reply({ content: '❌ Admins only.', ephemeral: true });
-    const ch      = interaction.options.getChannel('channel');
-    const rules   = interaction.options.getChannel('rules');
-    const announce= interaction.options.getChannel('announcements');
-    const general = interaction.options.getChannel('general');
-    if (!welcomeChannels[guild.id] || typeof welcomeChannels[guild.id] === 'string') {
-      welcomeChannels[guild.id] = {};
-    }
+    const ch       = interaction.options.getChannel('channel');
+    const rules    = interaction.options.getChannel('rules');
+    const announce = interaction.options.getChannel('announcements');
+    const general  = interaction.options.getChannel('general');
+    if (!welcomeChannels[guild.id] || typeof welcomeChannels[guild.id] === 'string') welcomeChannels[guild.id] = {};
     welcomeChannels[guild.id].channel = ch.id;
     if (rules)    welcomeChannels[guild.id].rules    = rules.id;
     if (announce) welcomeChannels[guild.id].announce = announce.id;
     if (general)  welcomeChannels[guild.id].general  = general.id;
     saveData();
     const linked = [
-      rules    ? `Rules → ${rules}`        : null,
+      rules    ? `Rules → ${rules}`            : null,
       announce ? `Announcements → ${announce}` : null,
-      general  ? `General → ${general}`    : null,
+      general  ? `General → ${general}`        : null,
     ].filter(Boolean).join('\n') || 'No channels linked — they will show as plain text.';
     return interaction.reply({ embeds: [new EmbedBuilder().setColor('Green').setTitle('✅ Welcome Channel Set')
       .addFields(
@@ -1149,8 +1451,8 @@ client.on('interactionCreate', async interaction => {
       .setTitle(`Balance - ${target.username}`)
       .addFields(
         { name: '💵 Total Balance:', value: `$${total}`, inline: false },
-        { name: '💰 Holding:', value: `$${u.cash}`, inline: false },
-        { name: '🏦 Bank:', value: `$${u.bank}`, inline: false },
+        { name: '💰 Holding:',       value: `$${u.cash}`, inline: false },
+        { name: '🏦 Bank:',          value: `$${u.bank}`, inline: false },
       )
       .setFooter({ text: 'dollars in the bank earn interest!' })
       .setTimestamp();
@@ -1257,7 +1559,6 @@ client.on('interactionCreate', async interaction => {
       .addFields({ name: 'Price Paid', value: `$${itemData.price}`, inline: true }, { name: 'New Balance', value: `$${economy[interaction.user.id].cash}`, inline: true })
       .setTimestamp()] });
   }
-
   if (commandName === 'addshopitem') {
     if (!isAdmin) return interaction.reply({ content: '❌ Admins only.', ephemeral: true });
     const name  = interaction.options.getString('name');
@@ -1270,13 +1571,12 @@ client.on('interactionCreate', async interaction => {
     return interaction.reply({ embeds: [new EmbedBuilder()
       .setColor(0x2ECC71).setTitle('✅ Shop Item Added')
       .addFields(
-        { name: 'Item',  value: name,        inline: true },
-        { name: 'Price', value: `$${price}`, inline: true },
-        { name: 'Role',  value: `${role}`,   inline: true },
-        { name: 'Description', value: desc,  inline: false },
+        { name: 'Item',        value: name,        inline: true },
+        { name: 'Price',       value: `$${price}`, inline: true },
+        { name: 'Role',        value: `${role}`,   inline: true },
+        { name: 'Description', value: desc,         inline: false },
       ).setTimestamp()] });
   }
-
   if (commandName === 'removeshopitem') {
     if (!isAdmin) return interaction.reply({ content: '❌ Admins only.', ephemeral: true });
     const name = interaction.options.getString('name');
