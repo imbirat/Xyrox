@@ -443,6 +443,12 @@ const commands = [
   new SlashCommandBuilder().setName('level').setDescription('Check your level/profile')
     .addUserOption(o => o.setName('user').setDescription('User to check')),
 
+  // ── NEW: Avatar & Member Info ──
+  new SlashCommandBuilder().setName('avatar').setDescription("Get a user's avatar")
+    .addUserOption(o => o.setName('user').setDescription('User (defaults to you)')),
+  new SlashCommandBuilder().setName('memberinfo').setDescription('View detailed info about a server member')
+    .addUserOption(o => o.setName('user').setDescription('User (defaults to you)')),
+
   // XP
   new SlashCommandBuilder().setName('addxp').setDescription('Add XP to a user')
     .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
@@ -774,13 +780,12 @@ client.on('messageCreate', async message => {
 
   // ?membercount
   if (message.content.toLowerCase() === '?membercount') {
-    await message.guild.members.fetch();
-    const humans = message.guild.members.cache.filter(m => !m.user.bot).size;
+    const total = message.guild.memberCount;
     return message.channel.send({ embeds: [new EmbedBuilder()
       .setColor(0x5865F2)
       .setAuthor({ name: message.guild.name, iconURL: message.guild.iconURL({ dynamic: true }) || undefined })
       .setTitle('👥 Member Count')
-      .setDescription(`**${humans}** members`)
+      .setDescription(`**${total}** members`)
       .setThumbnail(message.guild.iconURL({ dynamic: true }) || null)
       .setFooter({ text: message.guild.name })
       .setTimestamp()]});
@@ -1283,7 +1288,7 @@ client.on('interactionCreate', async interaction => {
         { name: '🛡️ AutoMod',    value: '`/automod dashboard` `setup` `enable` `pause` `disable`\n`addword` `removeword` `listwords` `addregex` `removeregex`\n`mentionlimit` `setlog` `removelog` `exemptrole` `exemptchannel`' },
         { name: '🔒 Anti-Nuke',   value: '`/antinuke enable` `disable` `status` `setlog` `punishment`\n`whitelist` `unwhitelist` `threshold`' },
         { name: '⚙️ Setup',       value: '`/setwelcome` `/setautorole` `/setxpchannel`' },
-        { name: '🔧 Utility',     value: '`/afk` `/ping` `/serverinfo` `?rules` `?membercount` `?lock` `?unlock`' },
+        { name: '🔧 Utility',     value: '`/afk` `/ping` `/serverinfo` `/avatar` `/memberinfo` `?rules` `?membercount` `?lock` `?unlock`' },
       )
       .setFooter({ text: hasAutoMod ? '🛡️ Discord AutoMod is active' : '💡 Set up AutoMod with /automod setup' })] });
   }
@@ -1344,6 +1349,112 @@ client.on('interactionCreate', async interaction => {
     return interaction.reply({ embeds: [new EmbedBuilder().setTitle(`${target.tag}'s Profile`).setColor('Gold')
       .setThumbnail(target.displayAvatarURL({ dynamic: true }))
       .setDescription(`**Level:** ${d.level}\n**XP:** ${d.xp} / ${d.level * 100}`)] });
+  }
+
+  // ════════════════════════════════════════════
+  // AVATAR
+  // ════════════════════════════════════════════
+  if (commandName === 'avatar') {
+    const target = interaction.options.getUser('user') || interaction.user;
+    const avatarURL = target.displayAvatarURL({ dynamic: true, size: 1024 });
+
+    // Build format download links
+    const formats = ['png', 'jpg', 'webp', target.avatar?.startsWith('a_') ? 'gif' : null]
+      .filter(Boolean)
+      .map(ext => `[${ext.toUpperCase()}](${target.displayAvatarURL({ extension: ext, size: 1024 })})`)
+      .join(' · ');
+
+    const embed = new EmbedBuilder()
+      .setColor(0x5865F2)
+      .setAuthor({ name: `${target.tag}'s Avatar`, iconURL: avatarURL })
+      .setImage(avatarURL)
+      .setDescription(`**Download:** ${formats}`)
+      .setFooter({ text: `ID: ${target.id}` })
+      .setTimestamp();
+
+    // Check for a server-specific avatar
+    const memberForAvatar = await guild.members.fetch(target.id).catch(() => null);
+    if (memberForAvatar?.avatar) {
+      const serverAvatarURL = memberForAvatar.displayAvatarURL({ dynamic: true, size: 1024 });
+      embed.addFields({ name: '🖼️ Also has a Server Avatar', value: `[Click to view](${serverAvatarURL})`, inline: false });
+    }
+
+    return interaction.reply({ embeds: [embed] });
+  }
+
+  // ════════════════════════════════════════════
+  // MEMBERINFO
+  // ════════════════════════════════════════════
+  if (commandName === 'memberinfo') {
+    const target = interaction.options.getUser('user') || interaction.user;
+    const member = await guild.members.fetch(target.id).catch(() => null);
+
+    if (!member) {
+      return interaction.reply({ content: '❌ That user is not in this server.', ephemeral: true });
+    }
+
+    // Roles (excluding @everyone, sorted by position descending)
+    const memberRoles = member.roles.cache
+      .filter(r => r.id !== guild.id)
+      .sort((a, b) => b.position - a.position);
+
+    const rolesList = memberRoles.map(r => `${r}`).slice(0, 15);
+    const extraRoles = memberRoles.size - 15;
+    const rolesDisplay = rolesList.length > 0
+      ? rolesList.join(', ') + (extraRoles > 0 ? ` *(+${extraRoles} more)*` : '')
+      : 'No roles';
+
+    // Key permissions
+    const keyPerms = [];
+    if (member.id === guild.ownerId)                                                   keyPerms.push('👑 Server Owner');
+    if (member.permissions.has(PermissionsBitField.Flags.Administrator))               keyPerms.push('🛡️ Administrator');
+    if (member.permissions.has(PermissionsBitField.Flags.ManageGuild))                 keyPerms.push('⚙️ Manage Server');
+    if (member.permissions.has(PermissionsBitField.Flags.ManageMessages))              keyPerms.push('🔨 Manage Messages');
+    if (member.permissions.has(PermissionsBitField.Flags.BanMembers))                  keyPerms.push('🔒 Ban Members');
+    if (member.permissions.has(PermissionsBitField.Flags.KickMembers))                 keyPerms.push('👢 Kick Members');
+    if (member.permissions.has(PermissionsBitField.Flags.ModerateMembers))             keyPerms.push('🔇 Moderate Members');
+    if (member.permissions.has(PermissionsBitField.Flags.ManageChannels))              keyPerms.push('📋 Manage Channels');
+    if (member.permissions.has(PermissionsBitField.Flags.ManageRoles))                 keyPerms.push('🏷️ Manage Roles');
+    if (member.permissions.has(PermissionsBitField.Flags.MentionEveryone))             keyPerms.push('📣 Mention Everyone');
+
+    // Warn count & XP from existing systems
+    const warnCount = warnings[guild.id]?.[target.id]?.length ?? 0;
+    const lvlData   = levels[guild.id]?.[target.id];
+
+    // Timeout status
+    const timedOut = member.isCommunicationDisabled();
+
+    const embed = new EmbedBuilder()
+      .setColor(member.displayHexColor === '#000000' ? 0x5865F2 : member.displayHexColor)
+      .setAuthor({ name: `${target.tag}`, iconURL: target.displayAvatarURL({ dynamic: true }) })
+      .setThumbnail(member.displayAvatarURL({ dynamic: true, size: 256 }))
+      .addFields(
+        { name: '🆔 User ID',          value: `\`${target.id}\``,                                                                                          inline: true  },
+        { name: '🤖 Bot',              value: target.bot ? 'Yes' : 'No',                                                                                   inline: true  },
+        { name: '💬 Nickname',         value: member.nickname ?? 'None',                                                                                   inline: true  },
+        { name: '📅 Account Created',  value: `<t:${Math.floor(target.createdTimestamp / 1000)}:D> (<t:${Math.floor(target.createdTimestamp / 1000)}:R>)`, inline: false },
+        { name: '📥 Joined Server',    value: `<t:${Math.floor(member.joinedTimestamp / 1000)}:D> (<t:${Math.floor(member.joinedTimestamp / 1000)}:R>)`,   inline: false },
+        { name: `🏷️ Roles [${memberRoles.size}]`, value: rolesDisplay,                                                                                    inline: false },
+        { name: '🔑 Key Permissions',  value: keyPerms.length > 0 ? keyPerms.join(', ') : 'None',                                                         inline: false },
+      )
+      .setFooter({ text: guild.name })
+      .setTimestamp();
+
+    // Optional fields — only shown if relevant
+    if (lvlData) {
+      embed.addFields({ name: '📈 Level', value: `Level **${lvlData.level}** • ${lvlData.xp}/${lvlData.level * 100} XP`, inline: true });
+    }
+    if (warnCount > 0) {
+      embed.addFields({ name: '⚠️ Warnings', value: `${warnCount}`, inline: true });
+    }
+    if (timedOut) {
+      embed.addFields({ name: '🔇 Timed Out Until', value: `<t:${Math.floor(member.communicationDisabledUntilTimestamp / 1000)}:R>`, inline: true });
+    }
+    if (member.premiumSinceTimestamp) {
+      embed.addFields({ name: '🚀 Boosting Since', value: `<t:${Math.floor(member.premiumSinceTimestamp / 1000)}:D>`, inline: true });
+    }
+
+    return interaction.reply({ embeds: [embed] });
   }
 
   if (commandName === 'setwelcome') {
