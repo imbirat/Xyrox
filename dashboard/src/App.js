@@ -248,16 +248,25 @@ function App() {
         localStorage.setItem('xyrox_guilds', JSON.stringify(data.guilds || []));
         setUser(data.user);
         setGuilds(data.guilds || []);
+        
+        // CRITICAL FIX: Remove token from URL to prevent re-exchange on refresh
+        window.history.replaceState({}, document.title, window.location.pathname);
       } else {
         console.error('Token exchange failed — asking user to login again');
         localStorage.removeItem('xyrox_user');
         localStorage.removeItem('xyrox_guilds');
         setUser(null);
         setGuilds([]);
+        
+        // Remove failed token from URL
+        window.history.replaceState({}, document.title, window.location.pathname);
       }
     } catch (error) {
       console.error('Error exchanging token:', error);
       setUser(null);
+      
+      // Remove token from URL even on error
+      window.history.replaceState({}, document.title, window.location.pathname);
     } finally {
       setLoading(false);
     }
