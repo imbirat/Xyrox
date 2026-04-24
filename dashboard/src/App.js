@@ -13,7 +13,7 @@ import Tickets from './pages/Tickets';
 import Settings from './pages/Settings';
 import './App.css';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+const API_URL = process.env.REACT_APP_API_URL || 'https://xyrox-production.up.railway.app';
 const ADD_BOT_URL = 'https://discord.com/oauth2/authorize?client_id=1496858363688915115&permissions=8&integration_type=0&scope=bot';
 
 // ─── Landing Navbar ───────────────────────────────────────────────────────────
@@ -173,8 +173,19 @@ function LandingPage({ onLogin }) {
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 function App() {
-  const [user, setUser] = useState(null);
-  const [guilds, setGuilds] = useState([]);
+  // Restore user from localStorage on first load (survives page refresh)
+  const [user, setUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem('xyrox_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch { return null; }
+  });
+  const [guilds, setGuilds] = useState(() => {
+    try {
+      const saved = localStorage.getItem('xyrox_guilds');
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
   const [selectedGuild, setSelectedGuild] = useState(null);
   const [guildConfig, setGuildConfig] = useState(null);
   const [socket, setSocket] = useState(null);
@@ -233,10 +244,14 @@ function App() {
       });
       if (response.ok) {
         const data = await response.json();
+        localStorage.setItem('xyrox_user', JSON.stringify(data.user));
+        localStorage.setItem('xyrox_guilds', JSON.stringify(data.guilds || []));
         setUser(data.user);
         setGuilds(data.guilds || []);
       } else {
         console.error('Token exchange failed — asking user to login again');
+        localStorage.removeItem('xyrox_user');
+        localStorage.removeItem('xyrox_guilds');
         setUser(null);
         setGuilds([]);
       }
@@ -258,15 +273,19 @@ function App() {
       });
       if (response.ok) {
         const data = await response.json();
+        localStorage.setItem('xyrox_user', JSON.stringify(data.user));
+        localStorage.setItem('xyrox_guilds', JSON.stringify(data.guilds || []));
         setUser(data.user);
         setGuilds(data.guilds || []);
       } else {
+        localStorage.removeItem('xyrox_user');
+        localStorage.removeItem('xyrox_guilds');
         setUser(null);
         setGuilds([]);
       }
     } catch (error) {
       console.error('Error fetching user:', error);
-      setUser(null);
+      // Don't clear localStorage on network error — user may just be offline
     } finally {
       setLoading(false);
     }
@@ -279,6 +298,10 @@ function App() {
   const handleLogout = async () => {
     try {
       await fetch(`${API_URL}/api/auth/logout`, { method: 'POST', credentials: 'include' });
+    } catch (e) { /* ignore */ }
+    localStorage.removeItem('xyrox_user');
+    localStorage.removeItem('xyrox_guilds');
+    try {
       setUser(null);
       setGuilds([]);
       setSelectedGuild(null);
