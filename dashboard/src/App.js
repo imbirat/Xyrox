@@ -19,7 +19,7 @@ const ADD_BOT_URL = 'https://discord.com/oauth2/authorize?client_id=149685836368
 // Enable debug logging
 const DEBUG = true;
 const log = (...args) => DEBUG && console.log('[AUTH]', ...args);
-const error = (...args) => console.error('[AUTH ERROR]', ...args);
+const logError = (...args) => console.error('[AUTH ERROR]', ...args);
 
 // ─── Landing Navbar ───────────────────────────────────────────────────────────
 function LandingNav({ onLogin }) {
@@ -211,7 +211,7 @@ function App() {
     log('Error in URL:', errorParam || 'NO');
 
     if (errorParam) {
-      error('OAuth error from URL:', errorParam);
+      logError('OAuth error from URL:', errorParam);
       setError('Authentication failed. Please try again.');
       // Clear URL params
       window.history.replaceState({}, document.title, window.location.pathname);
@@ -266,7 +266,7 @@ function App() {
         
       } else {
         const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-        error('Token exchange failed:', response.status, errorData);
+        logError('Token exchange failed:', response.status, errorData);
         setError(`Login failed: ${errorData.error || 'Unknown error'}`);
         setUser(null);
         setGuilds([]);
@@ -275,7 +275,7 @@ function App() {
         window.history.replaceState({}, document.title, window.location.pathname);
       }
     } catch (err) {
-      error('Error during token exchange:', err);
+      logError('Error during token exchange:', err);
       setError('Network error during login. Please check your connection.');
       setUser(null);
       
