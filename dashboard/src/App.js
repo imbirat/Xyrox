@@ -162,7 +162,7 @@ function LandingPage({ onLogin }) {
               <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"/>
               </svg>
-              Add to Server
+              Add to Discord
             </a>
           </div>
         </div>
@@ -171,65 +171,47 @@ function LandingPage({ onLogin }) {
   );
 }
 
-// ─── Main App ─────────────────────────────────────────────────────────────────
+// ─── Main App Component ───────────────────────────────────────────────────────
 function App() {
-  // Restore user from localStorage on first load (survives page refresh)
-  const [user, setUser] = useState(() => {
-    try {
-      const saved = localStorage.getItem('xyrox_user');
-      return saved ? JSON.parse(saved) : null;
-    } catch { return null; }
-  });
-  const [guilds, setGuilds] = useState(() => {
-    try {
-      const saved = localStorage.getItem('xyrox_guilds');
-      return saved ? JSON.parse(saved) : [];
-    } catch { return []; }
-  });
+  const [user, setUser] = useState(null);
+  const [guilds, setGuilds] = useState([]);
   const [selectedGuild, setSelectedGuild] = useState(null);
   const [guildConfig, setGuildConfig] = useState(null);
   const [socket, setSocket] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [authChecked, setAuthChecked] = useState(false);
 
-  // Initialize Socket.io only when logged in
+  // Connect socket when user is logged in
   useEffect(() => {
-    if (!user) return;
-    const newSocket = io(API_URL, { withCredentials: true });
-    setSocket(newSocket);
-    return () => newSocket.close();
-  }, [user]);
+    if (user && !socket) {
+      const newSocket = io(API_URL, { withCredentials: true });
+      setSocket(newSocket);
+      return () => newSocket.close();
+    }
+  }, [user, socket]);
 
-  // Listen for config updates
-  useEffect(() => {
-    if (!socket || !selectedGuild) return;
-    socket.on('config-updated', (data) => {
-      if (data.guildId === selectedGuild.id) setGuildConfig(data.config);
-    });
-    return () => socket.off('config-updated');
-  }, [socket, selectedGuild]);
-
-  // On mount: check for ?token= (from OAuth redirect) or just fetch existing session
+  // Initial auth check — runs once on mount
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const token = params.get('token');
     const error = params.get('error');
 
-    // Clean URL immediately so token isn't visible or reused
-    if (token || error) {
-      window.history.replaceState({}, document.title, window.location.pathname);
-    }
-
     if (error) {
       console.error('OAuth error:', error);
+      // Clear URL params
+      window.history.replaceState({}, document.title, window.location.pathname);
       setLoading(false);
+      setAuthChecked(true);
       return;
     }
 
     if (token) {
       // Exchange one-time token for session
+      console.log('Token found in URL, exchanging...');
       exchangeToken(token);
     } else {
       // Normal page load — check existing session
+      console.log('No token, checking existing session...');
       fetchUser();
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -238,25 +220,34 @@ function App() {
   const exchangeToken = async (token) => {
     setLoading(true);
     try {
+      console.log('Exchanging token...');
       const response = await fetch(`${API_URL}/api/auth/exchange?token=${token}`, {
         credentials: 'include',
         headers: { 'Cache-Control': 'no-cache' }
       });
+      
+      console.log('Exchange response status:', response.status);
+      
       if (response.ok) {
         const data = await response.json();
+        console.log('Token exchange successful, user:', data.user?.username);
         localStorage.setItem('xyrox_user', JSON.stringify(data.user));
         localStorage.setItem('xyrox_guilds', JSON.stringify(data.guilds || []));
         setUser(data.user);
         setGuilds(data.guilds || []);
+        setAuthChecked(true);
         
         // CRITICAL FIX: Remove token from URL to prevent re-exchange on refresh
         window.history.replaceState({}, document.title, window.location.pathname);
       } else {
-        console.error('Token exchange failed — asking user to login again');
+        console.error('Token exchange failed with status:', response.status);
+        const errorData = await response.json().catch(() => ({}));
+        console.error('Error details:', errorData);
         localStorage.removeItem('xyrox_user');
         localStorage.removeItem('xyrox_guilds');
         setUser(null);
         setGuilds([]);
+        setAuthChecked(true);
         
         // Remove failed token from URL
         window.history.replaceState({}, document.title, window.location.pathname);
@@ -264,6 +255,7 @@ function App() {
     } catch (error) {
       console.error('Error exchanging token:', error);
       setUser(null);
+      setAuthChecked(true);
       
       // Remove token from URL even on error
       window.history.replaceState({}, document.title, window.location.pathname);
@@ -276,47 +268,56 @@ function App() {
   const fetchUser = async () => {
     setLoading(true);
     try {
+      console.log('Fetching user from session...');
       const response = await fetch(`${API_URL}/api/auth/user?_=${Date.now()}`, {
         credentials: 'include',
         headers: { 'Cache-Control': 'no-cache' }
       });
+      
+      console.log('User fetch response status:', response.status);
+      
       if (response.ok) {
         const data = await response.json();
+        console.log('Session valid, user:', data.user?.username);
         localStorage.setItem('xyrox_user', JSON.stringify(data.user));
         localStorage.setItem('xyrox_guilds', JSON.stringify(data.guilds || []));
         setUser(data.user);
         setGuilds(data.guilds || []);
       } else {
+        console.log('No valid session found');
         localStorage.removeItem('xyrox_user');
         localStorage.removeItem('xyrox_guilds');
         setUser(null);
         setGuilds([]);
       }
+      setAuthChecked(true);
     } catch (error) {
       console.error('Error fetching user:', error);
       // Don't clear localStorage on network error — user may just be offline
+      setAuthChecked(true);
     } finally {
       setLoading(false);
     }
   };
 
   const handleLogin = () => {
+    console.log('Redirecting to Discord OAuth...');
     window.location.href = `${API_URL}/api/auth/discord`;
   };
 
   const handleLogout = async () => {
+    console.log('Logging out...');
     try {
       await fetch(`${API_URL}/api/auth/logout`, { method: 'POST', credentials: 'include' });
-    } catch (e) { /* ignore */ }
+    } catch (e) { 
+      console.error('Logout error:', e);
+    }
     localStorage.removeItem('xyrox_user');
     localStorage.removeItem('xyrox_guilds');
-    try {
-      setUser(null);
-      setGuilds([]);
-      setSelectedGuild(null);
-    } catch (error) {
-      console.error('Error logging out:', error);
-    }
+    setUser(null);
+    setGuilds([]);
+    setSelectedGuild(null);
+    setAuthChecked(true);
   };
 
   const handleGuildSelect = async (guild) => {
@@ -351,7 +352,8 @@ function App() {
     }
   };
 
-  if (loading) {
+  // Show loading only before auth check is complete
+  if (loading && !authChecked) {
     return (
       <div style={{ minHeight: '100vh', background: '#0f0a1e', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ color: '#a78bfa', fontSize: '1.2rem', fontWeight: 600 }}>Loading…</div>
@@ -359,6 +361,7 @@ function App() {
     );
   }
 
+  // Show landing page if not authenticated
   if (!user) {
     return <LandingPage onLogin={handleLogin} />;
   }
