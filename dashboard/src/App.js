@@ -2,14 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Route, Routes, Navigate } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import Navbar from './components/Navbar';
-import Dashboard from './components/Dashboard';
-import Moderation from './components/Moderation';
-import Logging from './components/Logging';
-import Welcome from './components/Welcome';
-import ReactionRoles from './components/ReactionRoles';
-import CustomCommands from './components/CustomCommands';
-import Tickets from './components/Tickets';
-import AntiNuke from './components/AntiNuke';
+import Dashboard from './pages/Dashboard';
+import AutoMod from './pages/AutoMod';
+import Logging from './pages/Logging';
+import Welcome from './pages/Welcome';
+import ReactionRoles from './pages/ReactionRoles';
+import CustomCommands from './pages/CustomCommands';
+import Tickets from './pages/Tickets';
+import Settings from './pages/Settings';
 import './App.css';
 
 const API_URL = process.env.REACT_APP_API_URL || 'https://xyrox-production.up.railway.app';
@@ -286,13 +286,13 @@ function App() {
             ) : (
               <Routes>
                 <Route path="/" element={<Dashboard guild={selectedGuild} />} />
-                <Route path="/moderation" element={<Moderation guild={selectedGuild} />} />
+                <Route path="/automod" element={<AutoMod guild={selectedGuild} />} />
                 <Route path="/logging" element={<Logging guild={selectedGuild} />} />
                 <Route path="/welcome" element={<Welcome guild={selectedGuild} />} />
                 <Route path="/reaction-roles" element={<ReactionRoles guild={selectedGuild} />} />
                 <Route path="/custom-commands" element={<CustomCommands guild={selectedGuild} />} />
                 <Route path="/tickets" element={<Tickets guild={selectedGuild} />} />
-                <Route path="/antinuke" element={<AntiNuke guild={selectedGuild} />} />
+                <Route path="/settings" element={<Settings guild={selectedGuild} />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             )}
