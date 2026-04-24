@@ -197,19 +197,61 @@ function App() {
     return () => socket.off('config-updated');
   }, [socket, selectedGuild]);
 
-  // Fetch user on mount — also handles post-OAuth redirect
+  // On mount: check for ?token= (from OAuth redirect) or just fetch existing session
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.has('login') || params.has('error')) {
+    const token = params.get('token');
+    const error = params.get('error');
+
+    // Clean URL immediately so token isn't visible or reused
+    if (token || error) {
       window.history.replaceState({}, document.title, window.location.pathname);
     }
-    fetchUser();
+
+    if (error) {
+      console.error('OAuth error:', error);
+      setLoading(false);
+      return;
+    }
+
+    if (token) {
+      // Exchange one-time token for session
+      exchangeToken(token);
+    } else {
+      // Normal page load — check existing session
+      fetchUser();
+    }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Exchange the one-time token from URL for user data + session
+  const exchangeToken = async (token) => {
+    setLoading(true);
+    try {
+      const response = await fetch(`${API_URL}/api/auth/exchange?token=${token}`, {
+        credentials: 'include',
+        headers: { 'Cache-Control': 'no-cache' }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setUser(data.user);
+        setGuilds(data.guilds || []);
+      } else {
+        console.error('Token exchange failed — asking user to login again');
+        setUser(null);
+        setGuilds([]);
+      }
+    } catch (error) {
+      console.error('Error exchanging token:', error);
+      setUser(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Check existing session (used on normal page loads / refreshes)
   const fetchUser = async () => {
     setLoading(true);
     try {
-      // Cache-buster prevents browser from serving stale 401 response
       const response = await fetch(`${API_URL}/api/auth/user?_=${Date.now()}`, {
         credentials: 'include',
         headers: { 'Cache-Control': 'no-cache' }
