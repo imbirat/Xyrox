@@ -52,16 +52,31 @@ const httpServer = createServer(app);
 const rawOrigins = process.env.DASHBOARD_URL || 'http://localhost:3000';
 const allowedOrigins = rawOrigins.split(',').map(o => o.trim()).filter(Boolean);
 
+console.log('🌍 Allowed CORS origins:', allowedOrigins);
+
 const corsOptions = {
     origin: (origin, callback) => {
-        if (!origin) return callback(null, true);
-        if (allowedOrigins.includes(origin)) return callback(null, true);
-        console.warn(`CORS blocked origin: ${origin}`);
+        // Allow requests with no origin (like mobile apps, Postman, curl)
+        if (!origin) {
+            console.log('✅ CORS: No origin (allowing)');
+            return callback(null, true);
+        }
+        
+        if (allowedOrigins.includes(origin)) {
+            console.log('✅ CORS: Origin allowed:', origin);
+            return callback(null, true);
+        }
+        
+        console.warn('❌ CORS blocked origin:', origin);
+        console.warn('   Allowed origins:', allowedOrigins);
         return callback(new Error(`Origin ${origin} not allowed by CORS`));
     },
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control'],
+    exposedHeaders: ['Set-Cookie'],
+    preflightContinue: false,
+    optionsSuccessStatus: 204
 };
 
 const io = new Server(httpServer, {
@@ -72,16 +87,33 @@ const io = new Server(httpServer, {
     }
 });
 
-// Middleware
-app.use(helmet({ contentSecurityPolicy: false }));
+// Middleware - ORDER MATTERS!
+app.use(helmet({ 
+    contentSecurityPolicy: false,
+    crossOriginResourcePolicy: false 
+}));
 app.use(morgan('dev'));
+
+// Handle OPTIONS preflight for all routes
 app.options('*', cors(corsOptions));
+
+// Apply CORS to all routes
 app.use(cors(corsOptions));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Setup session — MUST come before routes
+// Setup session — MUST come AFTER CORS but BEFORE routes
 setupSession(app);
+
+// Debug middleware - log all incoming requests
+app.use((req, res, next) => {
+    console.log(`\n📨 ${req.method} ${req.path}`);
+    console.log('   Origin:', req.get('origin') || 'none');
+    console.log('   Cookies:', req.headers.cookie || 'none');
+    console.log('   Session ID:', req.sessionID || 'none');
+    next();
+});
 
 // Store io instance on client
 client.io = io;
@@ -143,7 +175,6 @@ const loadRoutes = async () => {
 // Connect to Database
 const connectDB = async () => {
     try {
-        // useNewUrlParser and useUnifiedTopology are deprecated since driver v4 — removed
         await mongoose.connect(process.env.MONGODB_URI);
         console.log('✅ MongoDB connected successfully');
     } catch (error) {
@@ -178,7 +209,6 @@ const deployCommands = async () => {
         console.log(`✅ Deployed ${commands.length} slash commands to Discord`);
     } catch (error) {
         console.error('❌ Failed to deploy slash commands:', error.message);
-        // Non-fatal — bot still works, commands may already be registered
     }
 };
 
@@ -206,6 +236,17 @@ app.get('/health', (req, res) => {
     });
 });
 
+// Test endpoint for debugging sessions
+app.get('/api/debug/session', (req, res) => {
+    res.json({
+        sessionID: req.sessionID,
+        session: req.session,
+        cookies: req.headers.cookie,
+        origin: req.get('origin'),
+        hasUser: !!req.session?.user
+    });
+});
+
 // Initialize Bot
 const init = async () => {
     try {
@@ -217,6 +258,7 @@ const init = async () => {
         const PORT = process.env.PORT || process.env.API_PORT || 5000;
         httpServer.listen(PORT, '0.0.0.0', () => {
             console.log(`🚀 API Server running on port ${PORT}`);
+            console.log(`🌍 CORS enabled for: ${allowedOrigins.join(', ')}`);
         });
         
         await client.login(process.env.BOT_TOKEN);
