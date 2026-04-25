@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { 
-  FaServer, FaUsers, FaTerminal, FaShieldAlt, FaCog, FaChartLine,
+  FaServer, FaUsers, FaTerminal, FaShieldAlt, FaChartLine,
   FaUserPlus, FaBan, FaExclamationTriangle, FaCheckCircle, FaCircle
 } from 'react-icons/fa';
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
