@@ -8,7 +8,7 @@ export default {
         console.log(`📊 Serving ${client.guilds.cache.size} guilds`);
         console.log(`👥 Watching ${client.users.cache.size} users`);
         
-        // Set bot presence - always Watching /help | Xyrox
+        // Set bot presence - FIXED: Always shows "/help | Xyrox" without changing
         client.user.setPresence({
             activities: [{
                 name: '/help | Xyrox',
@@ -17,19 +17,18 @@ export default {
             status: 'online'
         });
         
-        // Rotate presence every 30 minutes (all Watching type)
+        console.log('🎮 Activity set to: Watching /help | Xyrox');
+        
+        // Optional: Re-set every hour to ensure it stays (in case Discord resets it)
         setInterval(() => {
-            const activities = [
-                { name: '/help | Xyrox', type: ActivityType.Watching },
-                { name: `${client.guilds.cache.size} servers`, type: ActivityType.Watching },
-                { name: 'AutoMod Active 🛡️', type: ActivityType.Watching }
-            ];
-            
-            const activity = activities[Math.floor(Math.random() * activities.length)];
             client.user.setPresence({
-                activities: [activity],
+                activities: [{
+                    name: '/help | Xyrox',
+                    type: ActivityType.Watching
+                }],
                 status: 'online'
             });
-        }, 1800000); // 30 minutes
+            console.log('🔄 Activity refreshed: Watching /help | Xyrox');
+        }, 3600000); // 1 hour
     }
 };
