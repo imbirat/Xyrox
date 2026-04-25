@@ -1,4 +1,4 @@
-# 🤖 Xyrox Discord SaaS Bot
+# 🤖 Xyrox Discord Bot
 
 <div align="center">
 
