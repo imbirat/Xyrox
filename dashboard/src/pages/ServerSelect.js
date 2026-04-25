@@ -154,30 +154,44 @@ export default function ServerSelect({ user, guilds, onSelect }) {
             borderRadius: '16px',
             border: '1px solid rgba(255,255,255,0.06)',
           }}>
-            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🤖</div>
+            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>⏳</div>
             <p style={{ color: '#94a3b8', fontSize: '1rem', marginBottom: '1.5rem', lineHeight: 1.6 }}>
-              Xyrox isn't in any of your servers yet.<br />
-              Add it to get started!
+              Loading your servers…<br />
+              <span style={{ fontSize: '0.85rem', color: '#6d6d8a' }}>If this takes too long, try refreshing the page.</span>
             </p>
-            <a
-              href={ADD_BOT_URL}
-              target="_blank"
-              rel="noreferrer"
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 8,
-                padding: '12px 24px', borderRadius: '10px',
-                background: 'linear-gradient(135deg, #7c3aed, #4f46e5)',
-                color: '#fff', fontWeight: 700, fontSize: '0.95rem',
-                textDecoration: 'none', transition: 'all 0.2s',
-              }}
-              onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 8px 24px rgba(124,58,237,0.4)'; }}
-              onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = 'none'; }}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"/>
-              </svg>
-              Add Xyrox to a Server
-            </a>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
+              <button
+                onClick={() => window.location.reload()}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 8,
+                  padding: '10px 22px', borderRadius: '10px',
+                  background: 'linear-gradient(135deg, #7c3aed, #4f46e5)',
+                  color: '#fff', fontWeight: 700, fontSize: '0.9rem',
+                  border: 'none', cursor: 'pointer', transition: 'all 0.2s',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.opacity = '0.85'; }}
+                onMouseLeave={e => { e.currentTarget.style.opacity = '1'; }}
+              >
+                🔄 Refresh
+              </button>
+              <a
+                href={ADD_BOT_URL}
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 8,
+                  padding: '10px 22px', borderRadius: '10px',
+                  background: 'rgba(124,58,237,0.12)',
+                  border: '1px solid rgba(124,58,237,0.4)',
+                  color: '#a78bfa', fontWeight: 700, fontSize: '0.9rem',
+                  textDecoration: 'none', transition: 'all 0.2s',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = 'rgba(124,58,237,0.25)'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'rgba(124,58,237,0.12)'; }}
+              >
+                + Add Xyrox to a Server
+              </a>
+            </div>
           </div>
         )}
 
