@@ -261,6 +261,12 @@ function App() {
         setUser(data.user);
         setGuilds(data.guilds || []);
         
+        // Cache session so page refreshes don't log the user out
+        try {
+          localStorage.setItem('xyrox_user', JSON.stringify(data.user));
+          localStorage.setItem('xyrox_guilds', JSON.stringify(data.guilds || []));
+        } catch (e) { /* localStorage unavailable */ }
+        
         // CRITICAL: Remove token from URL immediately
         window.history.replaceState({}, document.title, window.location.pathname);
         log('Token removed from URL');
@@ -318,14 +324,41 @@ function App() {
         
         setUser(data.user);
         setGuilds(data.guilds || []);
+        // Refresh the cache with latest data
+        try {
+          localStorage.setItem('xyrox_user', JSON.stringify(data.user));
+          localStorage.setItem('xyrox_guilds', JSON.stringify(data.guilds || []));
+        } catch (e) { /* localStorage unavailable */ }
       } else {
         const errorData = await response.json().catch(() => ({}));
         log('No valid session:', errorData);
+        // Fall back to cached session to prevent login loop
+        try {
+          const cachedUser = localStorage.getItem('xyrox_user');
+          const cachedGuilds = localStorage.getItem('xyrox_guilds');
+          if (cachedUser) {
+            log('Using cached session from localStorage');
+            setUser(JSON.parse(cachedUser));
+            setGuilds(JSON.parse(cachedGuilds || '[]'));
+            return;
+          }
+        } catch (e) { /* corrupted cache */ }
         setUser(null);
         setGuilds([]);
       }
     } catch (err) {
-      error('Error fetching user:', err);
+      logError('Error fetching user:', err);
+      // On network error, try cache before showing login page
+      try {
+        const cachedUser = localStorage.getItem('xyrox_user');
+        const cachedGuilds = localStorage.getItem('xyrox_guilds');
+        if (cachedUser) {
+          log('Network error - using cached session');
+          setUser(JSON.parse(cachedUser));
+          setGuilds(JSON.parse(cachedGuilds || '[]'));
+          return;
+        }
+      } catch (e) { /* corrupted cache */ }
       setError('Failed to check authentication status.');
       setUser(null);
     } finally {
@@ -347,8 +380,13 @@ function App() {
       });
       log('Logout successful');
     } catch (e) { 
-      error('Logout error:', e);
+      logError('Logout error:', e);
     }
+    // Clear cached session so user lands on login page
+    try {
+      localStorage.removeItem('xyrox_user');
+      localStorage.removeItem('xyrox_guilds');
+    } catch (e) { /* localStorage unavailable */ }
     setUser(null);
     setGuilds([]);
     setSelectedGuild(null);
@@ -367,7 +405,7 @@ function App() {
         log('Guild config loaded');
       }
     } catch (err) {
-      error('Error fetching guild config:', err);
+      logError('Error fetching guild config:', err);
     }
   };
 
@@ -386,7 +424,7 @@ function App() {
         if (socket) socket.emit('update-config', { guildId: selectedGuild.id, config: newConfig });
       }
     } catch (err) {
-      error('Error updating config:', err);
+      logError('Error updating config:', err);
     }
   };
 
