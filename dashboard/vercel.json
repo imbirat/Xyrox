@@ -1,15 +1,9 @@
 {
   "version": 2,
   "name": "xyrox-dashboard",
-  "builds": [
-    {
-      "src": "package.json",
-      "use": "@vercel/static-build",
-      "config": {
-        "distDir": "build"
-      }
-    }
-  ],
+  "installCommand": "cd dashboard && npm install",
+  "buildCommand": "cd dashboard && npm run build",
+  "outputDirectory": "dashboard/build",
   "routes": [
     {
       "src": "/static/(.*)",
