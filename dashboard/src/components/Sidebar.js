@@ -2,8 +2,7 @@ import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { 
   FaHome, FaShieldAlt, FaFileAlt, FaHandPeace, FaTheaterMasks, 
-  FaRobot, FaTicketAlt, FaCog, FaChevronDown, FaChevronLeft,
-  FaChartBar
+  FaRobot, FaTicketAlt, FaCog, FaChevronDown, FaChevronLeft
 } from 'react-icons/fa';
 
 export default function Sidebar({ guilds, selectedGuild, onGuildSelect }) {
@@ -147,18 +146,7 @@ export default function Sidebar({ guilds, selectedGuild, onGuildSelect }) {
       {/* Footer */}
       {!collapsed && (
         <div className="p-4 border-t border-gray-700/50">
-          <div className="bg-gradient-to-r from-purple-600/20 to-blue-600/20 border border-purple-500/30 rounded-xl p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <FaChartBar className="text-purple-400" />
-              <span className="font-semibold text-white text-sm">Premium</span>
-            </div>
-            <p className="text-xs text-gray-400 mb-3">
-              Unlock advanced features and analytics
-            </p>
-            <button className="w-full px-3 py-2 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 rounded-lg text-white text-sm font-semibold transition-all">
-              Upgrade Now
-            </button>
-          </div>
+          <p className="text-xs text-gray-600 text-center">Xyrox Dashboard</p>
         </div>
       )}
     </aside>
