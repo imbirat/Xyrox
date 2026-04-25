@@ -11,14 +11,12 @@ export default function Dashboard({ guild, config, user }) {
   const [stats, setStats] = useState(null);
   const [logs, setLogs] = useState([]);
   const [recentCommands, setRecentCommands] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [botStatus, setBotStatus] = useState('online');
   const [ping, setPing] = useState(null);
 
   const fetchStats = useCallback(async () => {
     try {
-      setLoading(true);
       const response = await fetch(`${API_URL}/api/guilds/${guild.id}/stats`, {
         credentials: 'include'
       });
@@ -29,8 +27,6 @@ export default function Dashboard({ guild, config, user }) {
     } catch (err) {
       console.error('Error fetching stats:', err);
       setError('Failed to load stats');
-    } finally {
-      setLoading(false);
     }
   }, [guild]);
 
@@ -118,10 +114,6 @@ export default function Dashboard({ guild, config, user }) {
     { name: 'Bans', value: 12, color: '#ef4444' },
     { name: 'Timeouts', value: 23, color: '#a78bfa' },
   ];
-
-  if (loading && !stats) {
-    return <LoadingSkeleton />;
-  }
 
   const totalMembers = stats?.totalMembers || guild.memberCount || 0;
   const activeUsers = stats?.activeUsers || Math.floor(totalMembers * 0.3);
@@ -401,24 +393,6 @@ function CommandEntry({ command }) {
         <div className="text-xs text-gray-500 whitespace-nowrap">
           {command.timestamp ? new Date(command.timestamp).toLocaleTimeString() : 'Now'}
         </div>
-      </div>
-    </div>
-  );
-}
-
-function LoadingSkeleton() {
-  return (
-    <div className="space-y-6 animate-pulse">
-      <div className="bg-gray-800/50 rounded-xl h-32" />
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        {[1, 2, 3, 4].map(i => (
-          <div key={i} className="bg-gray-800/50 rounded-xl h-32" />
-        ))}
-      </div>
-      <div className="bg-gray-800/50 rounded-xl h-48" />
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-gray-800/50 rounded-xl h-64" />
-        <div className="bg-gray-800/50 rounded-xl h-64" />
       </div>
     </div>
   );
