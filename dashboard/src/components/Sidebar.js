@@ -1,53 +1,86 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { FaHome, FaShieldAlt, FaFileAlt, FaHandPeace, FaTheaterMasks, FaRobot, FaTicketAlt, FaCog, FaChevronDown } from 'react-icons/fa';
+import { 
+  FaHome, FaShieldAlt, FaFileAlt, FaHandPeace, FaTheaterMasks, 
+  FaRobot, FaTicketAlt, FaCog, FaChevronDown, FaChevronLeft,
+  FaChartBar
+} from 'react-icons/fa';
 
 export default function Sidebar({ guilds, selectedGuild, onGuildSelect }) {
   const location = useLocation();
-  const [guildMenuOpen, setGuildMenuOpen] = React.useState(false);
+  const [guildMenuOpen, setGuildMenuOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   
   const navItems = [
-    { path: '/', icon: FaHome, label: 'Dashboard' },
-    { path: '/automod', icon: FaShieldAlt, label: 'AutoMod' },
-    { path: '/logging', icon: FaFileAlt, label: 'Logging' },
-    { path: '/welcome', icon: FaHandPeace, label: 'Welcome' },
-    { path: '/reaction-roles', icon: FaTheaterMasks, label: 'Reaction Roles' },
-    { path: '/custom-commands', icon: FaRobot, label: 'Custom Commands' },
-    { path: '/tickets', icon: FaTicketAlt, label: 'Tickets' },
-    { path: '/settings', icon: FaCog, label: 'Settings' }
+    { path: '/', icon: FaHome, label: 'Dashboard', color: 'purple' },
+    { path: '/automod', icon: FaShieldAlt, label: 'Auto Moderation', color: 'red' },
+    { path: '/logging', icon: FaFileAlt, label: 'Logging', color: 'blue' },
+    { path: '/welcome', icon: FaHandPeace, label: 'Welcome', color: 'green' },
+    { path: '/reaction-roles', icon: FaTheaterMasks, label: 'Reaction Roles', color: 'yellow' },
+    { path: '/custom-commands', icon: FaRobot, label: 'Commands', color: 'indigo' },
+    { path: '/tickets', icon: FaTicketAlt, label: 'Tickets', color: 'pink' },
+    { path: '/settings', icon: FaCog, label: 'Settings', color: 'gray' }
   ];
+
+  const colorClasses = {
+    purple: 'from-purple-600 to-purple-700',
+    red: 'from-red-600 to-red-700',
+    blue: 'from-blue-600 to-blue-700',
+    green: 'from-green-600 to-green-700',
+    yellow: 'from-yellow-600 to-yellow-700',
+    indigo: 'from-indigo-600 to-indigo-700',
+    pink: 'from-pink-600 to-pink-700',
+    gray: 'from-gray-600 to-gray-700',
+  };
   
   return (
-    <aside className="w-64 bg-gray-800 min-h-screen border-r border-gray-700">
+    <aside className={`${collapsed ? 'w-20' : 'w-72'} bg-gray-900/95 backdrop-blur-md min-h-screen border-r border-gray-700/50 transition-all duration-300 flex flex-col`}>
+      {/* Collapse Toggle */}
+      <button
+        onClick={() => setCollapsed(!collapsed)}
+        className="absolute -right-3 top-20 w-6 h-6 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-full flex items-center justify-center transition-colors z-10"
+      >
+        <FaChevronLeft className={`text-gray-400 text-xs transition-transform ${collapsed ? 'rotate-180' : ''}`} />
+      </button>
+
       {/* Guild Selector */}
-      <div className="p-4 border-b border-gray-700">
+      <div className="p-4 border-b border-gray-700/50">
         <button
           onClick={() => setGuildMenuOpen(!guildMenuOpen)}
-          className="w-full flex items-center justify-between px-4 py-3 bg-gray-700 hover:bg-gray-600 rounded-lg transition"
+          className="w-full flex items-center justify-between px-4 py-3 bg-gray-800/50 hover:bg-gray-800 border border-gray-700/50 rounded-xl transition-all duration-200 group"
         >
           {selectedGuild ? (
-            <div className="flex items-center gap-3">
+            <div className={`flex items-center gap-3 ${collapsed ? 'justify-center w-full' : ''}`}>
               {selectedGuild.icon ? (
                 <img
-                  src={`https://cdn.discordapp.com/icons/${selectedGuild.id}/${selectedGuild.icon}.png`}
+                  src={`https://cdn.discordapp.com/icons/${selectedGuild.id}/${selectedGuild.icon}.png?size=64`}
                   alt={selectedGuild.name}
-                  className="w-8 h-8 rounded-full"
+                  className="w-8 h-8 rounded-lg ring-2 ring-purple-500/50"
                 />
               ) : (
-                <div className="w-8 h-8 bg-gray-500 rounded-full flex items-center justify-center text-sm font-bold">
+                <div className="w-8 h-8 bg-gradient-to-br from-purple-600 to-blue-600 rounded-lg flex items-center justify-center text-sm font-bold ring-2 ring-purple-500/50">
                   {selectedGuild.name[0]}
                 </div>
               )}
-              <span className="font-semibold truncate">{selectedGuild.name}</span>
+              {!collapsed && (
+                <>
+                  <span className="font-semibold truncate text-white group-hover:text-purple-400 transition-colors">
+                    {selectedGuild.name}
+                  </span>
+                  <FaChevronDown className={`ml-auto text-gray-400 transition-transform ${guildMenuOpen ? 'rotate-180' : ''}`} />
+                </>
+              )}
             </div>
           ) : (
-            <span className="text-gray-400">Select Server</span>
+            <>
+              {!collapsed && <span className="text-gray-400">Select Server</span>}
+              <FaChevronDown className={`text-gray-400 transition-transform ${guildMenuOpen ? 'rotate-180' : ''}`} />
+            </>
           )}
-          <FaChevronDown className={`transition-transform ${guildMenuOpen ? 'rotate-180' : ''}`} />
         </button>
         
-        {guildMenuOpen && (
-          <div className="mt-2 bg-gray-700 rounded-lg max-h-64 overflow-y-auto">
+        {guildMenuOpen && !collapsed && (
+          <div className="mt-2 bg-gray-800 border border-gray-700/50 rounded-xl max-h-64 overflow-y-auto shadow-xl">
             {guilds.map(guild => (
               <button
                 key={guild.id}
@@ -55,20 +88,20 @@ export default function Sidebar({ guilds, selectedGuild, onGuildSelect }) {
                   onGuildSelect(guild);
                   setGuildMenuOpen(false);
                 }}
-                className="w-full flex items-center gap-3 px-4 py-2 hover:bg-gray-600 transition"
+                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-700/50 transition-colors first:rounded-t-xl last:rounded-b-xl"
               >
                 {guild.icon ? (
                   <img
-                    src={`https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.png`}
+                    src={`https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.png?size=64`}
                     alt={guild.name}
-                    className="w-6 h-6 rounded-full"
+                    className="w-8 h-8 rounded-lg"
                   />
                 ) : (
-                  <div className="w-6 h-6 bg-gray-500 rounded-full flex items-center justify-center text-xs font-bold">
+                  <div className="w-8 h-8 bg-gradient-to-br from-purple-600 to-blue-600 rounded-lg flex items-center justify-center text-xs font-bold">
                     {guild.name[0]}
                   </div>
                 )}
-                <span className="text-sm truncate">{guild.name}</span>
+                <span className="text-sm truncate text-white font-medium">{guild.name}</span>
               </button>
             ))}
           </div>
@@ -77,7 +110,7 @@ export default function Sidebar({ guilds, selectedGuild, onGuildSelect }) {
       
       {/* Navigation */}
       {selectedGuild && (
-        <nav className="p-4">
+        <nav className="flex-1 p-4">
           <div className="space-y-2">
             {navItems.map(item => {
               const Icon = item.icon;
@@ -87,19 +120,46 @@ export default function Sidebar({ guilds, selectedGuild, onGuildSelect }) {
                 <Link
                   key={item.path}
                   to={item.path}
-                  className={`flex items-center gap-3 px-4 py-3 rounded-lg transition ${
+                  className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 group relative overflow-hidden ${
                     isActive
-                      ? 'bg-blue-600 text-white'
-                      : 'text-gray-300 hover:bg-gray-700'
-                  }`}
+                      ? 'bg-gradient-to-r ' + colorClasses[item.color] + ' text-white shadow-lg'
+                      : 'text-gray-400 hover:text-white hover:bg-gray-800/50'
+                  } ${collapsed ? 'justify-center' : ''}`}
+                  title={collapsed ? item.label : ''}
                 >
-                  <Icon />
-                  <span>{item.label}</span>
+                  {isActive && (
+                    <div className="absolute inset-0 bg-white/10 animate-pulse" />
+                  )}
+                  <Icon className={`text-xl relative z-10 ${isActive ? '' : 'group-hover:scale-110 transition-transform'}`} />
+                  {!collapsed && (
+                    <span className="font-semibold relative z-10">{item.label}</span>
+                  )}
+                  {isActive && !collapsed && (
+                    <div className="ml-auto w-2 h-2 bg-white rounded-full relative z-10" />
+                  )}
                 </Link>
               );
             })}
           </div>
         </nav>
+      )}
+
+      {/* Footer */}
+      {!collapsed && (
+        <div className="p-4 border-t border-gray-700/50">
+          <div className="bg-gradient-to-r from-purple-600/20 to-blue-600/20 border border-purple-500/30 rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <FaChartBar className="text-purple-400" />
+              <span className="font-semibold text-white text-sm">Premium</span>
+            </div>
+            <p className="text-xs text-gray-400 mb-3">
+              Unlock advanced features and analytics
+            </p>
+            <button className="w-full px-3 py-2 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 rounded-lg text-white text-sm font-semibold transition-all">
+              Upgrade Now
+            </button>
+          </div>
+        </div>
       )}
     </aside>
   );
