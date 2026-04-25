@@ -11,6 +11,7 @@ import ReactionRoles from './pages/ReactionRoles';
 import CustomCommands from './pages/CustomCommands';
 import Tickets from './pages/Tickets';
 import Settings from './pages/Settings';
+import ServerSelect from './pages/ServerSelect';
 import './App.css';
 
 const API_URL = process.env.REACT_APP_API_URL || 'https://xyrox-production.up.railway.app';
@@ -424,6 +425,11 @@ function App() {
     return <LandingPage onLogin={handleLogin} />;
   }
 
+  // Show server selection as a full page when no guild is selected
+  if (!selectedGuild) {
+    return <ServerSelect user={user} guilds={guilds} onSelect={handleGuildSelect} />;
+  }
+
   return (
     <Router>
       <div className="min-h-screen bg-gray-900 text-white">
@@ -431,24 +437,17 @@ function App() {
         <div className="flex">
           <Sidebar guilds={guilds} selectedGuild={selectedGuild} onGuildSelect={handleGuildSelect} />
           <main className="flex-1 p-8">
-            {!selectedGuild ? (
-              <div className="text-center py-20">
-                <h2 className="text-3xl font-bold mb-4">Select a Server</h2>
-                <p className="text-gray-400">Choose a server from the sidebar to get started</p>
-              </div>
-            ) : (
-              <Routes>
-                <Route path="/" element={<Dashboard guild={selectedGuild} config={guildConfig} />} />
-                <Route path="/automod" element={<AutoMod config={guildConfig} updateConfig={updateConfig} />} />
-                <Route path="/logging" element={<Logging config={guildConfig} updateConfig={updateConfig} />} />
-                <Route path="/welcome" element={<Welcome config={guildConfig} updateConfig={updateConfig} />} />
-                <Route path="/reaction-roles" element={<ReactionRoles config={guildConfig} updateConfig={updateConfig} />} />
-                <Route path="/custom-commands" element={<CustomCommands config={guildConfig} updateConfig={updateConfig} />} />
-                <Route path="/tickets" element={<Tickets config={guildConfig} updateConfig={updateConfig} />} />
-                <Route path="/settings" element={<Settings config={guildConfig} updateConfig={updateConfig} />} />
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
-            )}
+            <Routes>
+              <Route path="/" element={<Dashboard guild={selectedGuild} config={guildConfig} />} />
+              <Route path="/automod" element={<AutoMod config={guildConfig} updateConfig={updateConfig} />} />
+              <Route path="/logging" element={<Logging config={guildConfig} updateConfig={updateConfig} />} />
+              <Route path="/welcome" element={<Welcome config={guildConfig} updateConfig={updateConfig} />} />
+              <Route path="/reaction-roles" element={<ReactionRoles config={guildConfig} updateConfig={updateConfig} />} />
+              <Route path="/custom-commands" element={<CustomCommands config={guildConfig} updateConfig={updateConfig} />} />
+              <Route path="/tickets" element={<Tickets config={guildConfig} updateConfig={updateConfig} />} />
+              <Route path="/settings" element={<Settings config={guildConfig} updateConfig={updateConfig} />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
           </main>
         </div>
       </div>
