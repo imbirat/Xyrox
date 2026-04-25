@@ -1,8 +1,8 @@
 {
   "version": 2,
   "name": "xyrox-dashboard",
-  "installCommand": "cd dashboard && npm install",
-  "buildCommand": "cd dashboard && npm run build",
+  "installCommand": "npm install --prefix dashboard",
+  "buildCommand": "npm run build --prefix dashboard",
   "outputDirectory": "dashboard/build",
   "routes": [
     {
