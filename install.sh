@@ -1,74 +1,60 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# ===================================================================
+#  Kythia SaaS v2.0 — Quick Install Script
+# ===================================================================
 
-# Xyrox Bot Installation Script
-echo "🤖 Xyrox Bot Installation Script"
-echo "================================="
-echo ""
+set -e
 
-# Check Node.js version
-echo "📦 Checking Node.js version..."
-NODE_VERSION=$(node -v 2>/dev/null)
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
 
-if [ -z "$NODE_VERSION" ]; then
-    echo "❌ Node.js is not installed!"
-    echo "Please install Node.js v18 or higher from https://nodejs.org/"
+echo -e "${GREEN}"
+echo "  ╔═══════════════════════════════════╗"
+echo "  ║     Kythia SaaS v2.0 Installer    ║"
+echo "  ╚═══════════════════════════════════╝"
+echo -e "${NC}"
+
+# ── Node version check ──────────────────────────────────────────────
+NODE_VERSION=$(node -v 2>/dev/null | cut -c 2- | cut -d. -f1)
+if [ -z "$NODE_VERSION" ] || [ "$NODE_VERSION" -lt 20 ]; then
+    echo -e "${RED}❌ Node.js 20+ is required. Got: $(node -v 2>/dev/null || echo 'not found')${NC}"
     exit 1
 fi
+echo -e "${GREEN}✅ Node.js $(node -v)${NC}"
 
-echo "✅ Node.js version: $NODE_VERSION"
+# ── Install bot dependencies ────────────────────────────────────────
 echo ""
-
-# Install bot dependencies
 echo "📦 Installing bot dependencies..."
 npm install
 
-if [ $? -ne 0 ]; then
-    echo "❌ Failed to install bot dependencies"
-    exit 1
-fi
-
-echo "✅ Bot dependencies installed"
+# ── Install dashboard dependencies ─────────────────────────────────
 echo ""
+echo "🎨 Installing dashboard dependencies..."
+cd dashboard && npm install && cd ..
 
-# Install dashboard dependencies
-echo "📦 Installing dashboard dependencies..."
-cd dashboard
-npm install
-
-if [ $? -ne 0 ]; then
-    echo "❌ Failed to install dashboard dependencies"
-    exit 1
-fi
-
-cd ..
-echo "✅ Dashboard dependencies installed"
-echo ""
-
-# Check if .env exists
+# ── Copy env template ───────────────────────────────────────────────
 if [ ! -f ".env" ]; then
-    echo "📝 Creating .env file..."
     cp .env.example .env
-    echo "✅ .env file created"
-    echo ""
-    echo "⚠️  IMPORTANT: Please edit .env and add your bot token and other credentials"
-    echo "   - BOT_TOKEN"
-    echo "   - CLIENT_ID"
-    echo "   - CLIENT_SECRET"
-    echo "   - MONGODB_URI"
-    echo ""
+    echo -e "${YELLOW}⚠️  Created .env from template. Edit it before starting the bot!${NC}"
 else
-    echo "✅ .env file already exists"
+    echo -e "${GREEN}✅ .env already exists${NC}"
 fi
 
 echo ""
-echo "🎉 Installation complete!"
+echo -e "${GREEN}═══════════════════════════════════════${NC}"
+echo -e "${GREEN}  ✅ Installation complete!${NC}"
+echo -e "${GREEN}═══════════════════════════════════════${NC}"
 echo ""
-echo "Next steps:"
-echo "1. Edit .env file with your credentials"
-echo "2. Start MongoDB (if using local)"
-echo "3. Deploy commands: npm run deploy"
-echo "4. Start bot: npm run dev"
-echo "5. Start dashboard: npm run dashboard"
+echo "  Next steps:"
+echo "  1. Edit .env with your Discord credentials"
+echo "  2. npm start       — Start the bot"
+echo "  3. cd dashboard && npm run dev — Start the dashboard"
 echo ""
-echo "📚 See QUICK_START.md for detailed setup instructions"
+echo "  Deployment:"
+echo "  • Railway: git push (auto-detected)"
+echo "  • Vercel:  cd dashboard && vercel deploy"
+echo "  • Docker:  docker build -t kythia . && docker run -d kythia"
+echo "  • PM2:     pm2 start ecosystem.config.js"
 echo ""

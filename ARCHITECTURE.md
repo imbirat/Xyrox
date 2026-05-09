@@ -1,665 +1,268 @@
-# 🏗️ Xyrox Bot - Architecture Documentation
-
-## Table of Contents
-- [System Overview](#system-overview)
-- [Command System](#command-system)
-- [AutoMod System](#automod-system)
-- [Real-time Communication](#real-time-communication)
-- [Security](#security)
-- [Performance](#performance)
-
----
+# 🏗️ Kythia SaaS v2.0 — Architecture Documentation
 
 ## System Overview
 
-### High-Level Architecture
-
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        XYROX ECOSYSTEM                       │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌──────────────┐      ┌──────────────┐      ┌───────────┐ │
-│  │   Discord    │◄────►│  Discord Bot │◄────►│  MongoDB  │ │
-│  │   Servers    │      │  (Discord.js)│      │ Database  │ │
-│  └──────────────┘      └──────┬───────┘      └───────────┘ │
-│                               │                              │
-│                               │ Socket.io                    │
-│                               ▼                              │
-│                      ┌─────────────────┐                     │
-│                      │  Express API    │                     │
-│                      │  Server         │                     │
-│                      └────────┬────────┘                     │
-│                               │                              │
-│                               │ HTTP/WebSocket               │
-│                               ▼                              │
-│                      ┌─────────────────┐                     │
-│                      │ React Dashboard │                     │
-│                      │  (Frontend)     │                     │
-│                      └─────────────────┘                     │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Technology Stack
-
-| Layer | Technology | Purpose |
-|-------|------------|---------|
-| Bot Core | Discord.js v14 | Discord API interaction |
-| Runtime | Node.js 18+ | JavaScript execution |
-| Database | MongoDB + Mongoose | Data persistence |
-| API Server | Express.js | REST API endpoints |
-| Real-time | Socket.io | Live dashboard updates |
-| Frontend | React 18 | Dashboard UI |
-| Styling | Tailwind CSS | Dashboard design |
-| Auth | Passport.js | OAuth authentication |
-
----
-
-## Command System
-
-### Hybrid Command Architecture
-
-The bot supports three command modes per guild:
-
-1. **Slash Only** (`/` commands) - Default
-2. **Prefix Only** (`?` commands)
-3. **Both** (Hybrid mode)
-
-### Command Execution Flow
-
-```
-User Input
-    │
-    ├─── Slash Command (/ban)
-    │       │
-    │       ├── interactionCreate Event
-    │       │       │
-    │       │       ├── Fetch Guild Config
-    │       │       │
-    │       │       ├── Validate Command Mode
-    │       │       │    (check if slash allowed)
-    │       │       │
-    │       │       ├── Permission Check
-    │       │       │
-    │       │       ├── Cooldown Check
-    │       │       │
-    │       │       └── Execute Command
-    │       │
-    │       └── Response to User
-    │
-    └─── Prefix Command (?ban)
-            │
-            ├── messageCreate Event
-            │       │
-            │       ├── AutoMod Check First
-            │       │    (spam, caps, links, etc.)
-            │       │
-            │       ├── Fetch Guild Config
-            │       │
-            │       ├── Validate Command Mode
-            │       │    (check if prefix allowed)
-            │       │
-            │       ├── Parse Command & Args
-            │       │
-            │       ├── Permission Check
-            │       │
-            │       └── Execute Command
-            │
-            └── Response to User
+┌─────────────────────────────────────────────────────────────────────┐
+│                       KYTHIA SAAS ECOSYSTEM                          │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  ┌─────────────┐      ┌───────────────────┐      ┌───────────────┐ │
+│  │   Discord   │◄────►│   Kythia Bot      │◄────►│   SQLite /    │ │
+│  │   Servers   │      │   (Discord.js)    │      │   MySQL       │ │
+│  └─────────────┘      └────────┬──────────┘      └───────────────┘ │
+│                                │                                     │
+│                                │ Internal (same process)             │
+│                                ▼                                     │
+│                       ┌───────────────────┐                         │
+│                       │  Hono Addon API   │  (port 3001)            │
+│                       │  (kythia-core)    │                         │
+│                       └────────┬──────────┘                         │
+│                                │                                     │
+│                                │ Proxied by                         │
+│                                ▼                                     │
+│                       ┌───────────────────┐                         │
+│                       │  Express SaaS API │  (port 3001 shared)     │
+│                       │  - OAuth2/Auth    │                         │
+│                       │  - Guild routes   │                         │
+│                       │  - Addon proxy    │                         │
+│                       │  - Socket.IO      │                         │
+│                       └────────┬──────────┘                         │
+│                                │ HTTPS + Cookies                    │
+│                                ▼                                     │
+│                       ┌───────────────────┐                         │
+│                       │  React Dashboard  │  https://xyrox.qzz.io  │
+│                       │  (Vite + React)   │                         │
+│                       └───────────────────┘                         │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Command Structure
+## Deployment URLs
 
-```javascript
-// Example Command File: src/commands/moderation/ban.js
-export default {
-    // Slash command data
-    data: new SlashCommandBuilder()
-        .setName('ban')
-        .setDescription('Ban a user')
-        .addUserOption(...)
-        .addStringOption(...),
-    
-    // Prefix command support
-    name: 'ban',
-    aliases: ['b', 'banish'],
-    
-    // Permissions required
-    permissions: [PermissionFlagsBits.BanMembers],
-    
-    // Cooldown in seconds
-    cooldown: 3,
-    
-    // Execution function
-    async execute(interaction) {
-        // Command logic
-    }
-};
-```
+| Service   | URL |
+|-----------|-----|
+| Dashboard | https://xyrox.qzz.io |
+| API/Bot   | https://xyrox-production.up.railway.app |
 
-### Command Mode Validation
-
-**Middleware:** `src/middleware/commandHandler.js`
-
-```javascript
-export async function validateCommandMode(interaction, isSlash) {
-    const guildConfig = await getGuildConfig(guildId);
-    const mode = guildConfig.commandMode;
-    
-    // Validation rules
-    if (mode === 'slash' && !isSlash) return false;
-    if (mode === 'prefix' && isSlash) return false;
-    if (mode === 'both') return true;
-    
-    return true;
-}
-```
-
-### Guild Config Caching
-
-To optimize performance, guild configs are cached:
-
-```javascript
-const guildCache = new Map();
-const CACHE_TTL = 300000; // 5 minutes
-
-export async function getGuildConfig(guildId) {
-    // Check cache first
-    const cached = guildCache.get(guildId);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-        return cached.data;
-    }
-    
-    // Fetch from database
-    let guildConfig = await Guild.findOne({ guildId });
-    
-    // Update cache
-    guildCache.set(guildId, {
-        data: guildConfig,
-        timestamp: Date.now()
-    });
-    
-    return guildConfig;
-}
-```
-
-**Cache Invalidation:**
-- On config update via dashboard
-- On config update via commands
-- After 5 minutes (TTL)
-
----
-
-## AutoMod System
-
-### AutoMod Pipeline
+## Monorepo Structure
 
 ```
-Message Received (messageCreate event)
-    │
-    ├── Bot Message? → Skip
-    │
-    ├── DM? → Skip
-    │
-    ├── Fetch Guild Config
-    │
-    ├── AutoMod Enabled? → No → Continue to command parsing
-    │                      ↓ Yes
-    │
-    ├── Check Ignored Roles
-    │   └── Has ignored role? → Skip AutoMod
-    │
-    ├── Check Ignored Channels
-    │   └── In ignored channel? → Skip AutoMod
-    │
-    ├── Run Parallel Rule Checks:
-    │   │
-    │   ├── Anti-Spam Check
-    │   │   └── Track message frequency
-    │   │       └── Count messages in timeframe
-    │   │           └── Exceeds threshold? → Violation
-    │   │
-    │   ├── Anti-Caps Check
-    │   │   └── Count capital letters
-    │   │       └── Calculate percentage
-    │   │           └── > capsPercentage? → Violation
-    │   │
-    │   ├── Anti-Links Check
-    │   │   └── Regex match URLs
-    │   │       └── Check whitelist
-    │   │           └── Not whitelisted? → Violation
-    │   │
-    │   ├── Anti-Invites Check
-    │   │   └── Regex match Discord invites
-    │   │       └── Check whitelist
-    │   │           └── Not whitelisted? → Violation
-    │   │
-    │   ├── Anti-Mention Spam Check
-    │   │   └── Count user + role mentions
-    │   │       └── > maxMentions? → Violation
-    │   │
-    │   └── Anti-Bad Words Check
-    │       └── Check against bad words list
-    │           └── Match found? → Violation
-    │
-    ├── Violations Found?
-    │   │
-    │   ├── No → Continue to command parsing
-    │   │
-    │   └── Yes → Handle Violation:
-    │           │
-    │           ├── Delete message
-    │           │
-    │           ├── Fetch user warnings from DB
-    │           │
-    │           ├── Add new warning to DB
-    │           │
-    │           ├── Send warning message
-    │           │   (auto-delete after 5 seconds)
-    │           │
-    │           ├── Check if max warnings reached
-    │           │   │
-    │           │   └── Yes → Apply Punishment:
-    │           │           │
-    │           │           ├── Mute (timeout)
-    │           │           │   └── member.timeout(duration)
-    │           │           │
-    │           │           ├── Kick
-    │           │           │   └── member.kick(reason)
-    │           │           │
-    │           │           └── Ban
-    │           │               └── member.ban(reason)
-    │           │
-    │           └── Clear warnings after punishment
-    │
-    └── End
-```
-
-### Spam Detection Algorithm
-
-**In-Memory Tracker:**
-
-```javascript
-const spamTracker = new Map();
-// Structure: Map<'guildId-userId', [timestamp1, timestamp2, ...]>
-
-export function checkSpam(message, guildConfig) {
-    const key = `${message.guild.id}-${message.author.id}`;
-    const now = Date.now();
-    
-    // Get user's message timestamps
-    if (!spamTracker.has(key)) {
-        spamTracker.set(key, []);
-    }
-    
-    const userMessages = spamTracker.get(key);
-    
-    // Remove messages outside timeframe
-    const timeframe = guildConfig.automod.spamTimeframe; // 5000ms
-    const recentMessages = userMessages.filter(timestamp => 
-        now - timestamp < timeframe
-    );
-    
-    // Add current message
-    recentMessages.push(now);
-    spamTracker.set(key, recentMessages);
-    
-    // Check threshold
-    const threshold = guildConfig.automod.spamThreshold; // 5 messages
-    if (recentMessages.length >= threshold) {
-        return { isSpam: true, count: recentMessages.length };
-    }
-    
-    return { isSpam: false };
-}
-```
-
-**Memory Management:**
-- Old entries auto-expire after timeframe
-- Map size naturally limited by active users
-- Optional periodic cleanup for inactive entries
-
-### Rule Implementation Examples
-
-**Anti-Caps:**
-```javascript
-if (automod.antiCaps && content.length > 10) {
-    const capsCount = (content.match(/[A-Z]/g) || []).length;
-    const capsPercentage = (capsCount / content.length) * 100;
-    
-    if (capsPercentage > automod.capsPercentage) {
-        violations.push({
-            type: 'caps',
-            reason: `Message contains ${capsPercentage.toFixed(0)}% caps`
-        });
-    }
-}
-```
-
-**Anti-Links:**
-```javascript
-if (automod.antiLinks) {
-    const linkRegex = /(https?:\/\/[^\s]+)/gi;
-    const links = content.match(linkRegex);
-    
-    if (links && links.length > 0) {
-        const hasWhitelistedLink = links.some(link => 
-            automod.whitelistedLinks.some(wl => link.includes(wl))
-        );
-        
-        if (!hasWhitelistedLink) {
-            violations.push({
-                type: 'links',
-                reason: 'Unauthorized links detected'
-            });
-        }
-    }
-}
-```
-
-**Anti-Invites:**
-```javascript
-const inviteRegex = /(discord\.gg|discord\.com\/invite|discordapp\.com\/invite)\/[a-zA-Z0-9]+/gi;
-const invites = content.match(inviteRegex);
-
-if (invites && invites.length > 0) {
-    const hasWhitelistedInvite = invites.some(invite => 
-        automod.whitelistedInvites.some(wl => invite.includes(wl))
-    );
-    
-    if (!hasWhitelistedInvite) {
-        violations.push({
-            type: 'invites',
-            reason: 'Discord invites are not allowed'
-        });
-    }
-}
-```
-
----
-
-## Real-time Communication
-
-### Socket.io Architecture
-
-**Server Side:**
-```javascript
-import { Server } from 'socket.io';
-
-const io = new Server(httpServer, {
-    cors: {
-        origin: process.env.DASHBOARD_URL,
-        methods: ['GET', 'POST'],
-        credentials: true
-    }
-});
-
-// Store io instance on client
-client.io = io;
-
-// Connection handler
-io.on('connection', (socket) => {
-    console.log('Dashboard connected:', socket.id);
-    
-    socket.on('update-config', async (data) => {
-        const { guildId, config } = data;
-        
-        // Emit to all connected clients
-        io.emit('config-updated', { guildId, config });
-        
-        // Clear bot cache
-        clearGuildCache(guildId);
-    });
-});
-```
-
-**Client Side (Dashboard):**
-```javascript
-import io from 'socket.io-client';
-
-const socket = io('http://localhost:5000');
-
-// Listen for config updates
-socket.on('config-updated', (data) => {
-    if (data.guildId === selectedGuild.id) {
-        setGuildConfig(data.config);
-    }
-});
-
-// Send update to bot
-const updateConfig = async (updates) => {
-    // Update via API
-    await fetch(`/api/guilds/${guildId}/config`, {
-        method: 'PATCH',
-        body: JSON.stringify(updates)
-    });
-    
-    // Emit to bot
-    socket.emit('update-config', {
-        guildId,
-        config: newConfig
-    });
-};
-```
-
-### Event Flow
+kythia-saas/
+│
+├── src/                          # Backend + bot (deployed to Railway)
+│   ├── index.js                  # Bootstrap entry point
+│   │
+│   ├── bot/
+│   │   └── managers/
+│   │       └── BotManager.js     # Orchestrates kythia-core + Discord client
+│   │
+│   ├── api/
+│   │   ├── server.js             # Express SaaS API server
+│   │   ├── routes/
+│   │   │   ├── auth.js           # Discord OAuth2, session exchange
+│   │   │   ├── guilds.js         # Guild config, channels, roles, stats
+│   │   │   ├── bot.js            # Bot status, invite URL
+│   │   │   └── addons.js         # Proxy to Kythia addon Hono API
+│   │   └── middleware/
+│   │       ├── auth.js           # isAuthenticated, hasGuildAccess
+│   │       ├── session.js        # MongoDB-backed session setup
+│   │       └── errorHandler.js   # Centralised error handler
+│   │
+│   ├── config/
+│   │   └── index.js              # Unified config from env vars
+│   │
+│   ├── database/
+│   │   └── connection.js         # Sequelize connection manager
+│   │
+│   └── utils/
+│       └── logger/
+│           └── index.js          # Structured logger (JSON prod, coloured dev)
+│
+├── dashboard/                    # Frontend (deployed to Vercel)
+│   ├── vercel.json               # Vercel config (xyrox.qzz.io)
+│   ├── vite.config.js
+│   ├── tailwind.config.js
+│   └── src/
+│       ├── App.jsx               # Root: auth, routing, socket.io
+│       ├── main.jsx
+│       ├── index.css
+│       ├── utils/
+│       │   └── api.js            # Centralised fetch client → Railway
+│       ├── components/
+│       │   └── shared/
+│       │       ├── Navbar.jsx
+│       │       └── Sidebar.jsx
+│       └── pages/
+│           ├── Dashboard.jsx
+│           ├── ServerSelect.jsx
+│           ├── AutoMod.jsx
+│           ├── Leveling.jsx
+│           ├── Welcome.jsx
+│           ├── Tickets.jsx
+│           ├── ReactionRoles.jsx
+│           ├── Giveaway.jsx
+│           ├── Economy.jsx
+│           ├── Logging.jsx
+│           ├── Modules.jsx
+│           ├── Settings.jsx
+│           └── SendMessage.jsx
+│
+├── .env.example                  # Environment variable template
+├── package.json                  # Root dependencies
+├── ecosystem.config.js           # PM2 config
+├── railway.json                  # Railway deployment
+├── nixpacks.toml                 # Railway build config
+├── Dockerfile                    # Container deployment
+├── Procfile                      # Process definition
+└── install.sh                    # One-command setup
 
 ```
-Dashboard Update
-    │
-    ├── User changes AutoMod setting
-    │
-    ├── React calls updateConfig()
-    │       │
-    │       ├── PATCH /api/guilds/:id/config
-    │       │       │
-    │       │       ├── Update MongoDB
-    │       │       │
-    │       │       └── Return new config
-    │       │
-    │       └── Socket emit 'update-config'
-    │
-    ├── Server receives 'update-config'
-    │       │
-    │       ├── Clear guild cache
-    │       │
-    │       └── Broadcast 'config-updated'
-    │
-    └── All connected dashboards receive update
-            │
-            └── Re-render with new config
-```
 
----
+## Technology Stack
 
-## Security
+| Layer       | Technology            | Purpose                                 |
+|-------------|-----------------------|-----------------------------------------|
+| Bot Core    | Discord.js v14        | Discord API interaction                 |
+| Bot Engine  | kythia-core           | Addon system, command loading, DI       |
+| Database    | Sequelize + SQLite/MySQL | Relational data (all Kythia models)  |
+| Session DB  | MongoDB + connect-mongo | Session persistence across restarts   |
+| API Server  | Express.js            | REST API + OAuth2 proxy                |
+| Addon API   | Hono                  | Lightweight addon-specific routes      |
+| Real-time   | Socket.IO             | Live dashboard updates                 |
+| Auth        | Passport.js           | Discord OAuth2                         |
+| Frontend    | React 18 + Vite       | SaaS dashboard                         |
+| Styling     | Tailwind CSS          | Dashboard design                       |
 
-### Authentication Flow
+## Auth Flow (Vercel ↔ Railway)
 
 ```
 User clicks "Login with Discord"
-    │
-    ├── Redirect to Discord OAuth
-    │       │
-    │       └── /api/auth/discord
-    │
-    ├── User authorizes on Discord
-    │
-    ├── Discord redirects to callback
-    │       │
-    │       └── /api/auth/discord/callback
-    │
-    ├── Server receives OAuth code
-    │       │
-    │       ├── Exchange code for access token
-    │       │
-    │       ├── Fetch user info from Discord
-    │       │
-    │       ├── Fetch user's guilds
-    │       │
-    │       └── Create session
-    │
-    └── Redirect to dashboard
+        │
+        ▼
+GET https://xyrox-production.up.railway.app/api/auth/discord
+        │
+        ▼ (redirect)
+Discord OAuth consent screen
+        │
+        ▼ (callback)
+GET /api/auth/discord/callback
+→ Filter guilds to manageable only
+→ Generate cryptographic one-time token (64-char hex)
+→ Store token in memory (5 min TTL)
+→ Redirect to https://xyrox.qzz.io?token=<TOKEN>
+        │
+        ▼ (dashboard JS)
+GET /api/auth/exchange?token=<TOKEN>
+→ Validate token format + expiry
+→ DELETE token (one-time use)
+→ Save user + guilds to MongoDB session
+→ Set kythia.sid cookie (secure, sameSite=none)
+→ Return { user, guilds }
+        │
+        ▼
+Dashboard authenticated ✅
+All subsequent requests include kythia.sid cookie
 ```
 
-### Permission Checks
+## Cookie Configuration
 
-**Bot Commands:**
+```
+Name:     kythia.sid
+secure:   true  (production) / false (dev)
+sameSite: none  (production) / lax   (dev)
+httpOnly: true  (XSS protection)
+maxAge:   7 days
+```
+
+These settings allow cross-site cookie delivery from Vercel (xyrox.qzz.io) to Railway (xyrox-production.up.railway.app).
+
+## Process Safety
+
 ```javascript
-// Check if user has required permissions
-if (command.permissions) {
-    const hasPermission = member.permissions.has(command.permissions);
-    if (!hasPermission) {
-        return interaction.reply({
-            content: '❌ You do not have permission.',
-            ephemeral: true
-        });
-    }
-}
+process.on('unhandledRejection', (reason) => { log.error(...); });
+process.on('uncaughtException',  (err)    => { log.error(...); process.exit(1); });
+process.on('SIGTERM',            ()       => { /* graceful shutdown */ });
 ```
 
-**API Routes:**
-```javascript
-// Check if user has access to guild
-const userGuilds = req.user.guilds || [];
-const hasAccess = userGuilds.some(g => g.id === guildId);
+## Kythia Addon Compatibility
 
-if (!hasAccess) {
-    return res.status(403).json({ error: 'Access denied' });
-}
+All original Kythia addons are preserved exactly:
+
+| Addon         | Feature Flag   | API Route          |
+|---------------|----------------|--------------------|
+| activity      | activityOn     | /api/addons/activity/:guildId |
+| adventure     | —              | (bot-only)         |
+| ai            | aiOn           | /api/addons/ai/:guildId |
+| automod       | automodOn      | /api/addons/automod/:guildId |
+| autoreact     | —              | /api/addons/autoreact/:guildId |
+| autoreply     | —              | /api/addons/autoreply/:guildId |
+| birthday      | —              | /api/addons/birthday/:guildId |
+| economy       | economyOn      | /api/guilds/:guildId/leaderboard?type=economy |
+| giveaway      | —              | /api/addons/giveaway/:guildId |
+| leveling      | levelingOn     | /api/addons/leveling/:guildId |
+| modmail       | —              | /api/addons/modmail/:guildId |
+| music         | musicOn        | (bot-only)         |
+| reaction-role | —              | /api/addons/reaction-roles/:guildId |
+| ticket        | —              | /api/addons/tickets/:guildId |
+| welcomer      | welcomeInOn    | /api/addons/welcome/:guildId |
+| verification  | —              | (bot-only)         |
+
+The SaaS Express API proxies all addon data requests to Kythia's internal Hono API, adding authentication and guild-access checks in the SaaS layer.
+
+## Deployment Guide
+
+### Railway (Bot + API Backend)
+
+1. Push to GitHub
+2. Create new Railway project from GitHub repo
+3. Add environment variables from `.env.example`
+4. Railway auto-detects `railway.json` and starts
+
+**Required env vars for Railway:**
+```
+DISCORD_BOT_TOKEN
+DISCORD_BOT_CLIENT_ID
+DISCORD_CLIENT_SECRET
+SESSION_SECRET
+DASHBOARD_URL=https://xyrox.qzz.io
+OAUTH_CALLBACK=https://xyrox-production.up.railway.app/api/auth/discord/callback
+API_ALLOWED_ORIGIN=https://xyrox.qzz.io
+MONGODB_URI (optional but recommended)
 ```
 
-### Rate Limiting
+### Vercel (Dashboard)
 
-**API Rate Limiting:**
-```javascript
-import { RateLimiterMemory } from 'rate-limiter-flexible';
-
-const rateLimiter = new RateLimiterMemory({
-    points: 10, // Number of requests
-    duration: 1, // Per second
-});
-
-app.use(async (req, res, next) => {
-    try {
-        await rateLimiter.consume(req.ip);
-        next();
-    } catch (err) {
-        res.status(429).send('Too Many Requests');
-    }
-});
+```bash
+cd dashboard
+vercel deploy --prod
 ```
 
-**Command Cooldowns:**
-```javascript
-const cooldowns = new Map();
-const cooldownAmount = (command.cooldown || 3) * 1000;
-
-if (timestamps.has(userId)) {
-    const expirationTime = timestamps.get(userId) + cooldownAmount;
-    
-    if (now < expirationTime) {
-        const timeLeft = (expirationTime - now) / 1000;
-        return interaction.reply({
-            content: `Please wait ${timeLeft.toFixed(1)}s`,
-            ephemeral: true
-        });
-    }
-}
+**Required env vars for Vercel:**
+```
+VITE_API_URL=https://xyrox-production.up.railway.app
+VITE_APP_URL=https://xyrox.qzz.io
+VITE_CLIENT_ID=<your Discord client ID>
 ```
 
----
+### Docker
 
-## Performance
-
-### Optimization Strategies
-
-**1. Database Indexing**
-```javascript
-guildSchema.index({ guildId: 1 });
-guildSchema.index({ 'warnings.userId': 1 });
+```bash
+docker build -t kythia-saas .
+docker run -d \
+  --name kythia \
+  -p 3001:3001 \
+  --env-file .env \
+  kythia-saas
 ```
 
-**2. Guild Config Caching**
-- 5-minute TTL cache
-- Reduces database queries by ~95%
-- Invalidation on updates
+### PM2 (Self-hosted VPS)
 
-**3. Connection Pooling**
-```javascript
-mongoose.connect(MONGODB_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-    maxPoolSize: 10 // Connection pool
-});
+```bash
+npm install
+cp .env.example .env
+# Edit .env
+pm2 start ecosystem.config.js --env production
+pm2 save
+pm2 startup
 ```
-
-**4. Efficient Event Handling**
-- Only listen to necessary intents
-- Filter events early
-- Use partials for large objects
-
-**5. Memory Management**
-- Spam tracker auto-cleanup
-- Limited cache sizes
-- Periodic garbage collection
-
-### Monitoring
-
-**Key Metrics:**
-- Command execution time
-- Database query performance
-- Memory usage
-- WebSocket connections
-- API response times
-
-**Logging:**
-```javascript
-import morgan from 'morgan';
-
-// HTTP request logging
-app.use(morgan('combined'));
-
-// Custom bot logging
-console.log('[COMMAND]', commandName, 'executed by', user.tag);
-console.log('[AUTOMOD]', 'Violation detected:', violation.type);
-```
-
----
-
-## Scalability
-
-### Horizontal Scaling
-
-**Bot Sharding:**
-```javascript
-import { ShardingManager } from 'discord.js';
-
-const manager = new ShardingManager('./src/index.js', {
-    token: process.env.BOT_TOKEN,
-    totalShards: 'auto'
-});
-
-manager.spawn();
-```
-
-**Database Replication:**
-- MongoDB replica sets
-- Read preference optimization
-- Write concern levels
-
-**Load Balancing:**
-- Multiple API instances
-- Nginx reverse proxy
-- Session affinity for WebSockets
-
----
-
-This architecture is designed to be:
-- ✅ **Scalable** - Handles growth efficiently
-- ✅ **Maintainable** - Clean separation of concerns
-- ✅ **Performant** - Optimized for speed
-- ✅ **Secure** - Multiple security layers
-- ✅ **Real-time** - Instant synchronization
-

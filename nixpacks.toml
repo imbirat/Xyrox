@@ -1,8 +1,5 @@
-# Railway Nixpacks build configuration
-# Ensures Node 20 is used and the correct start command is run
-
 [phases.setup]
-nixPkgs = ["nodejs_20"]
+nixPkgs = ["nodejs_20", "python3", "pkg-config", "cairo", "pango", "libpng", "libjpeg", "giflib"]
 
 [phases.install]
 cmds = ["npm install --omit=dev"]
