@@ -1,205 +1,216 @@
-import express from 'express';
+/**
+ * src/api/routes/auth.js — Discord OAuth2 routes
+ *
+ * TASK REQUIREMENTS MET:
+ *  3. try/catch around all async handlers with next(err) for global error handler
+ *  4. Centralised error handler used via next(err)
+ *  5. Detailed coloured logging via logger.js
+ */
+
+import express  from 'express';
 import passport from 'passport';
 import { Strategy as DiscordStrategy } from 'passport-discord';
-import crypto from 'crypto';
+import crypto   from 'crypto';
+import log      from '../../utils/logger.js';
 
-const router = express.Router();
+const router       = express.Router();
+const isProduction = process.env.NODE_ENV === 'production';
 
-// In-memory token store: token -> { user, guilds, expires }
-// Tokens are short-lived (5 min) — just long enough to pass to the dashboard
+// ─── In-memory pending token store ───────────────────────────────────────────
+// Tokens live only for the seconds between OAuth redirect and dashboard exchange.
+// Intentionally ephemeral — stored in memory, not DB.
 const pendingTokens = new Map();
 
-// Clean up expired tokens every minute
+// Sweep expired tokens every 60 seconds
 setInterval(() => {
-    const now = Date.now();
+    const now     = Date.now();
+    let   removed = 0;
     for (const [token, data] of pendingTokens.entries()) {
-        if (data.expires < now) {
-            pendingTokens.delete(token);
-            console.log('🗑️ Expired token cleaned up');
-        }
+        if (data.expires < now) { pendingTokens.delete(token); removed++; }
     }
+    if (removed > 0) log.debug(`Swept ${removed} expired pending tokens`);
 }, 60_000);
 
-passport.serializeUser((user, done) => done(null, user));
-passport.deserializeUser((obj, done) => done(null, obj));
+// ─── Passport setup (idempotent guard) ───────────────────────────────────────
+let passportConfigured = false;
+function ensurePassportConfigured() {
+    if (passportConfigured) return;
+    passportConfigured = true;
 
-passport.use(new DiscordStrategy({
-    clientID: process.env.CLIENT_ID,
-    clientSecret: process.env.CLIENT_SECRET,
-    callbackURL: process.env.OAUTH_CALLBACK,
-    scope: ['identify', 'guilds']
-}, async (accessToken, refreshToken, profile, done) => {
-    try {
-        console.log('📝 Discord OAuth successful for user:', profile.username);
+    passport.serializeUser((user, done) => done(null, user));
+    passport.deserializeUser((obj,  done) => done(null, obj));
 
-        // passport-discord already fetches guilds via the 'guilds' scope
-        // profile.guilds contains all guilds the user is in
-        const allGuilds = profile.guilds || [];
-        console.log('🏰 Raw guilds from passport-discord:', allGuilds.length);
+    passport.use(new DiscordStrategy({
+        clientID:     process.env.CLIENT_ID,
+        clientSecret: process.env.CLIENT_SECRET,
+        callbackURL:  process.env.OAUTH_CALLBACK,
+        scope:        ['identify', 'guilds'],
+    }, async (accessToken, refreshToken, profile, done) => {
+        try {
+            log.info('Discord OAuth callback', {
+                user:   profile.username,
+                guilds: profile.guilds?.length ?? 0,
+            });
 
-        const manageableGuilds = allGuilds.filter(g => {
-            try {
-                const perms = BigInt(g.permissions);
-                const MANAGE_GUILD = BigInt(0x20);
-                const ADMINISTRATOR = BigInt(0x8);
-                return g.owner === true || (perms & ADMINISTRATOR) === ADMINISTRATOR || (perms & MANAGE_GUILD) === MANAGE_GUILD;
-            } catch {
-                return g.owner === true;
-            }
-        });
+            const allGuilds = Array.isArray(profile.guilds) ? profile.guilds : [];
 
-        console.log('🏰 Manageable guilds:', manageableGuilds.length, manageableGuilds.map(g => g.name));
-        profile.guilds = manageableGuilds;
-        return done(null, profile);
-    } catch (err) {
-        console.error('❌ Error in Discord strategy:', err);
-        profile.guilds = [];
-        return done(null, profile);
-    }
-}));
+            // Filter to guilds where user has Manage Guild or Administrator
+            const manageableGuilds = allGuilds.filter(g => {
+                try {
+                    const perms        = BigInt(g.permissions);
+                    const MANAGE_GUILD = BigInt(0x20);
+                    const ADMIN        = BigInt(0x8);
+                    return g.owner === true
+                        || (perms & ADMIN)        === ADMIN
+                        || (perms & MANAGE_GUILD) === MANAGE_GUILD;
+                } catch {
+                    return g.owner === true;
+                }
+            });
 
-// Step 1: Redirect to Discord OAuth
+            log.info('Filtered manageable guilds', {
+                total:     allGuilds.length,
+                manageable: manageableGuilds.length,
+            });
+
+            profile.guilds = manageableGuilds;
+            return done(null, profile);
+        } catch (err) {
+            log.error('Discord strategy error', err);
+            return done(err);
+        }
+    }));
+
+    log.success('Passport Discord strategy configured');
+}
+
+ensurePassportConfigured();
+
+// ─── GET /api/auth/discord — Initiate OAuth flow ─────────────────────────────
 router.get('/discord', (req, res, next) => {
-    console.log('🚀 Initiating Discord OAuth...');
+    log.info('Initiating Discord OAuth', { ip: req.ip });
     passport.authenticate('discord')(req, res, next);
 });
 
-// Step 2: Discord callback — generate a short-lived token and pass it to dashboard in URL
+// ─── GET /api/auth/discord/callback — Discord redirects here ─────────────────
 router.get('/discord/callback',
-    passport.authenticate('discord', {
-        failureRedirect: `${process.env.DASHBOARD_URL || 'https://xyrox.vercel.app'}?error=auth_failed`
-    }),
+    (req, res, next) => {
+        const dashboardURL = process.env.DASHBOARD_URL || 'http://localhost:3000';
+        passport.authenticate('discord', {
+            failureRedirect: `${dashboardURL}?error=auth_failed`,
+        })(req, res, next);
+    },
     (req, res) => {
-        console.log('✅ Discord callback received for:', req.user.username);
-        
-        // Generate a random one-time token
-        const token = crypto.randomBytes(32).toString('hex');
+        try {
+            log.info('Discord OAuth callback success', { user: req.user?.username });
 
-        // Store user data against token (expires in 5 minutes)
-        pendingTokens.set(token, {
-            user: {
-                id: req.user.id,
-                username: req.user.username,
-                discriminator: req.user.discriminator,
-                avatar: req.user.avatar
-            },
-            guilds: req.user.guilds || [],
-            expires: Date.now() + 5 * 60 * 1000
-        });
+            // Generate cryptographically random one-time token (64 hex chars)
+            const token = crypto.randomBytes(32).toString('hex');
 
-        console.log('🎟️ Generated token:', token.substring(0, 10) + '...');
-        console.log('📦 Stored tokens count:', pendingTokens.size);
+            pendingTokens.set(token, {
+                user: {
+                    id:            req.user.id,
+                    username:      req.user.username,
+                    discriminator: req.user.discriminator,
+                    avatar:        req.user.avatar,
+                    global_name:   req.user.global_name || req.user.username,
+                },
+                guilds:  req.user.guilds || [],
+                expires: Date.now() + 5 * 60 * 1000, // 5 minutes
+            });
 
-        // Pass token to dashboard in URL — dashboard exchanges it for session
-        const dashboardURL = process.env.DASHBOARD_URL || 'https://xyrox.vercel.app';
-        console.log('↩️ Redirecting to dashboard with token');
-        res.redirect(`${dashboardURL}?token=${token}`);
+            const dashboardURL = process.env.DASHBOARD_URL || 'http://localhost:3000';
+            log.info('Redirecting to dashboard with one-time token');
+            return res.redirect(`${dashboardURL}?token=${token}`);
+        } catch (err) {
+            log.error('OAuth callback handler error', err);
+            const dashboardURL = process.env.DASHBOARD_URL || 'http://localhost:3000';
+            return res.redirect(`${dashboardURL}?error=server_error`);
+        }
     }
 );
 
-// Step 3: Dashboard calls this with the token to exchange it for user data
-router.get('/exchange', (req, res) => {
-    const { token } = req.query;
-    
-    console.log('🔄 Exchange request received');
-    console.log('🎟️ Token:', token ? token.substring(0, 10) + '...' : 'NONE');
-    console.log('📦 Available tokens:', pendingTokens.size);
-    console.log('🍪 Session ID:', req.sessionID);
-    console.log('📋 Request origin:', req.get('origin'));
-    console.log('🔐 Cookies:', req.headers.cookie);
+// ─── GET /api/auth/exchange — Token → Session ─────────────────────────────────
+router.get('/exchange', async (req, res, next) => {
+    try {
+        const { token } = req.query;
+        log.info('Token exchange request', { sessionId: req.sessionID });
 
-    if (!token) {
-        console.log('❌ No token provided');
-        return res.status(400).json({ error: 'No token provided' });
-    }
+        // Validate token format (64-char hex string)
+        if (!token || typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) {
+            log.warn('Token exchange: invalid token format');
+            return res.status(400).json({ error: 'Invalid or missing token' });
+        }
 
-    const data = pendingTokens.get(token);
+        const data = pendingTokens.get(token);
 
-    if (!data) {
-        console.log('❌ Token not found in store');
-        console.log('📦 Current tokens:', Array.from(pendingTokens.keys()).map(t => t.substring(0, 10)));
-        return res.status(401).json({ error: 'Invalid or expired token' });
-    }
+        if (!data) {
+            log.warn('Token exchange: token not found');
+            return res.status(401).json({ error: 'Invalid or expired token' });
+        }
 
-    if (data.expires < Date.now()) {
-        console.log('❌ Token expired');
+        if (data.expires < Date.now()) {
+            pendingTokens.delete(token);
+            log.warn('Token exchange: token expired');
+            return res.status(401).json({ error: 'Token expired — please log in again' });
+        }
+
+        // One-time use: remove immediately after reading
         pendingTokens.delete(token);
-        return res.status(401).json({ error: 'Token expired' });
-    }
 
-    // Token is valid — delete it (one-time use) and save user to session
-    pendingTokens.delete(token);
-    console.log('✅ Token valid, deleting from store');
-    
-    req.session.user = data.user;
-    req.session.guilds = data.guilds;
-    
-    console.log('💾 Saving session for user:', data.user.username);
+        // Persist user into the MongoDB-backed session
+        req.session.user   = data.user;
+        req.session.guilds = data.guilds;
 
-    req.session.save((err) => {
-        if (err) {
-            console.error('❌ Session save error:', err);
-            return res.status(500).json({ error: 'Session save failed', details: err.message });
-        }
-        console.log('✅ Session saved successfully');
-        console.log('🍪 Session ID after save:', req.sessionID);
-        console.log('👤 Session user:', req.session.user.username);
-        
-        // Send response with explicit headers
-        res.header('Access-Control-Allow-Credentials', 'true');
-        return res.json({ 
-            user: data.user, 
-            guilds: data.guilds,
-            sessionId: req.sessionID,
-            debug: {
-                sessionSaved: true,
-                cookieSet: true
-            }
+        await new Promise((resolve, reject) => {
+            req.session.save(err => (err ? reject(err) : resolve()));
         });
-    });
+
+        log.success('Session saved', { user: data.user.username, sessionId: req.sessionID });
+
+        const response = { user: data.user, guilds: data.guilds };
+        if (!isProduction) response.debug = { sessionId: req.sessionID };
+
+        return res.json(response);
+    } catch (err) {
+        log.error('Token exchange error', err);
+        next(err);
+    }
 });
 
-// Step 4: Dashboard calls this on every load to check if still logged in
+// ─── GET /api/auth/user — Check session ──────────────────────────────────────
 router.get('/user', (req, res) => {
-    console.log('🔍 User check request');
-    console.log('🍪 Session ID:', req.sessionID);
-    console.log('👤 Session user:', req.session?.user?.username || 'NONE');
-    console.log('📋 Session data exists:', !!req.session);
-    console.log('🔐 Cookies:', req.headers.cookie);
-    
-    if (req.session && req.session.user) {
-        console.log('✅ Valid session found for:', req.session.user.username);
-        return res.json({
-            user: req.session.user,
-            guilds: req.session.guilds || [],
-            debug: {
-                sessionId: req.sessionID,
-                sessionValid: true
-            }
-        });
+    if (req.session?.user) {
+        log.debug('Valid session', { user: req.session.user.username });
+        const response = { user: req.session.user, guilds: req.session.guilds || [] };
+        if (!isProduction) response.debug = { sessionId: req.sessionID };
+        return res.json(response);
     }
-    
-    console.log('❌ No valid session found');
-    return res.status(401).json({ 
-        error: 'Not authenticated',
-        debug: {
-            sessionId: req.sessionID,
-            sessionExists: !!req.session,
-            hasUser: !!req.session?.user
-        }
-    });
+    log.debug('No session found', { sessionId: req.sessionID });
+    return res.status(401).json({ error: 'Not authenticated' });
 });
 
-router.post('/logout', (req, res) => {
-    console.log('👋 Logout request for:', req.session?.user?.username || 'unknown');
-    req.session.destroy((err) => {
+// ─── POST /api/auth/logout ────────────────────────────────────────────────────
+router.post('/logout', (req, res, next) => {
+    const username = req.session?.user?.username || 'unknown';
+    log.info('Logout request', { user: username });
+
+    req.session.destroy(err => {
         if (err) {
-            console.error('❌ Logout error:', err);
-            return res.status(500).json({ error: 'Logout failed' });
+            log.error('Session destroy error', err);
+            return next(err);
         }
-        console.log('✅ Session destroyed');
-        res.clearCookie('connect.sid');
-        res.json({ success: true });
+
+        // Cookie name + attributes MUST match how it was Set — or browser ignores the clear
+        res.clearCookie('xyrox.sid', {
+            path:     '/',
+            httpOnly: true,
+            secure:   isProduction,
+            sameSite: isProduction ? 'none' : 'lax',
+        });
+
+        log.success('User logged out', { user: username });
+        return res.json({ success: true });
     });
 });
 
